@@ -107,7 +107,7 @@ ALV2_OUTER_MODES: dict[str, int] = {
 }  # fmt: skip
 
 VERIFIED_INNER = {"Static", "Breathing", "Rainbow", "Meteor", "Meteor Rainbow", "Pac-Man", "Lottery", "Runway"}
-VERIFIED_OUTER = {"Static", "Breathing", "Runway", "Color Cycle", "Wave", "Mixing"}
+VERIFIED_OUTER = {"Static", "Breathing", "Runway", "Color Cycle", "Wave", "Mixing", "Rainbow"}  # Rainbow: seen animating on hardware
 
 PER_FAN_MODES = {"Static", "Breathing"}
 CORNER_MODES = {"Static Colorful", "Breathing Colorful"}
