@@ -58,7 +58,7 @@ class HidrawTransport:
         except PermissionError as e:
             raise HidrawError(
                 e.errno,
-                f"no permission to open {devnode}; install packaging/99-unihub.rules "
+                f"no permission to open {devnode}; install packaging/99-louver.rules "
                 "(see README) or run as root",
             ) from e
 

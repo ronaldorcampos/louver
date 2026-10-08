@@ -2,10 +2,10 @@ import json
 
 import pytest
 
-from unihub import config as cfgmod
-from unihub.devices import StrimerPlus, UniHubALV2
-from unihub.rgbfx import gradient, render_hub_port, render_strimer_port, thermal
-from unihub.themes import THEMES, apply_theme
+from louver import config as cfgmod
+from louver.devices import StrimerPlus, UniHubALV2
+from louver.rgbfx import gradient, render_hub_port, render_strimer_port, thermal
+from louver.themes import THEMES, apply_theme
 
 from .fakes import Z, HUB_RESPONSES, STRIMER_RESPONSES, FakeTransport
 from .test_control import Rig, _req, server  # noqa: F401  (fixture)
@@ -113,9 +113,9 @@ def test_strimer_per_port_mixes_hardware_and_software():
 
 def test_http_theme_endpoint(server):  # noqa: F811
     r, port = server
-    code, cfg = _req(port, "/api/theme", body={"name": "Stealth"}, headers={"X-UniHub": "1"})
+    code, cfg = _req(port, "/api/theme", body={"name": "Stealth"}, headers={"X-Louver": "1"})
     assert code == 200 and cfg["theme"] == "Stealth" and cfg["hub"]["lighting"][0]["mode"] == "Off"
-    code, err = _req(port, "/api/theme", body={"name": "Nope"}, headers={"X-UniHub": "1"})
+    code, err = _req(port, "/api/theme", body={"name": "Nope"}, headers={"X-Louver": "1"})
     assert code == 400
     code, m = _req(port, "/api/meta")
     assert {t["name"] for t in m["themes"]} == set(THEMES)

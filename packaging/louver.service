@@ -1,0 +1,14 @@
+[Unit]
+Description=Louver - Lian Li fan and RGB control
+Documentation=file://%h/.local/share/louver/README.md
+
+[Service]
+Type=simple
+Environment="PYTHONPATH=%h/.local/share/louver"
+ExecStart=/usr/bin/python3 -m louver daemon
+Restart=on-failure
+RestartPreventExitStatus=3
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -21,7 +21,7 @@ from .rgbfx import SOFTWARE_MODES, render_hub_port, render_strimer_port
 from .sensors import SensorHub
 from .themes import THEMES, apply_theme
 
-log = logging.getLogger("unihub")
+log = logging.getLogger("louver")
 
 WEB_DIR = Path(__file__).with_name("web")
 RECONNECT_EVERY = 5.0
@@ -492,7 +492,7 @@ _CTYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css"
 
 def make_handler(ctrl: Controller, allowed_hosts: set[str]):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "unihub"
+        server_version = "louver"
 
         def log_message(self, fmt, *args):  # quiet by default
             log.debug("http: " + fmt, *args)
@@ -534,8 +534,8 @@ def make_handler(ctrl: Controller, allowed_hosts: set[str]):
                 return self._json(HTTPStatus.FORBIDDEN, {"error": "bad host"})
             # A custom header forces a CORS preflight, which we never grant,
             # so other websites can't drive the fans through the browser.
-            if self.headers.get("X-UniHub") != "1":
-                return self._json(HTTPStatus.FORBIDDEN, {"error": "missing X-UniHub header"})
+            if self.headers.get("X-Louver") != "1":
+                return self._json(HTTPStatus.FORBIDDEN, {"error": "missing X-Louver header"})
             if self.path not in ("/api/config", "/api/theme", "/api/lab"):
                 return self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             try:

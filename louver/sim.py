@@ -1,4 +1,4 @@
-"""Simulated controllers for `unihub daemon --demo` (UI work without hardware)."""
+"""Simulated controllers for `louver daemon --demo` (UI work without hardware)."""
 
 from __future__ import annotations
 

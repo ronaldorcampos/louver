@@ -1,7 +1,7 @@
 import pytest
 
-from unihub import config as cfgmod
-from unihub.mbfans import MotherboardFans
+from louver import config as cfgmod
+from louver.mbfans import MotherboardFans
 
 from .test_control import Rig
 

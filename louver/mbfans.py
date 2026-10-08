@@ -2,7 +2,7 @@
 
 Each header is ``pwmN`` (0-255) with ``pwmN_enable`` (1 = manual; 2+ = the
 chip's own automatic curve, which the BIOS programs). We switch a header to
-manual only while UniHub drives it, and always restore the original enable
+manual only while Louver drives it, and always restore the original enable
 value afterwards, so the BIOS curve takes back over.
 """
 

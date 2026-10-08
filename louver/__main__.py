@@ -1,13 +1,13 @@
-"""unihub command line.
+"""louver command line.
 
-  unihub daemon            run fan control + the web UI (127.0.0.1:47321)
-  unihub app [--autostart] the desktop app: window + tray icon
-  unihub ui                open the desktop app (falls back to a browser window)
-  unihub status            show RPM / duty / temps from the running daemon
-  unihub set PORT PERCENT  put a port in manual mode at PERCENT (via daemon)
-  unihub probe             read-only hardware check, no daemon needed
-  unihub mb-list           motherboard fan headers: RPM, PWM, mode (read-only)
-  unihub mb-test N PCT     run motherboard header N at PCT for a few seconds, then hand it back to BIOS
+  louver daemon            run fan control + the web UI (127.0.0.1:47321)
+  louver app [--autostart] the desktop app: window + tray icon
+  louver ui                open the desktop app (falls back to a browser window)
+  louver status            show RPM / duty / temps from the running daemon
+  louver set PORT PERCENT  put a port in manual mode at PERCENT (via daemon)
+  louver probe             read-only hardware check, no daemon needed
+  louver mb-list           motherboard fan headers: RPM, PWM, mode (read-only)
+  louver mb-test N PCT     run motherboard header N at PCT for a few seconds, then hand it back to BIOS
 """
 
 from __future__ import annotations
@@ -34,11 +34,13 @@ ALREADY_RUNNING = 3  # the unit's RestartPreventExitStatus: don't retry against 
 
 def _hardware_lock(what: str, hint: str):
     """Take the one-process-at-a-time hardware lock, or explain who holds it."""
-    lock = instance.acquire()
-    if lock is None:
-        pid = instance.holder()
-        print(f"{what}: UniHub is already running{f' (pid {pid})' if pid else ''}. {hint}", file=sys.stderr)
-    return lock
+    got = instance.try_acquire()
+    if isinstance(got, instance.Lock):
+        return got
+    if got.app == "UniHub":
+        hint = "That's this app's old install; run ./install.sh to replace it."
+    print(f"{what}: {got.app} is already running{f' (pid {got.pid})' if got.pid else ''}. {hint}", file=sys.stderr)
+    return None
 
 
 def _url(cfg: dict, path: str) -> str:
@@ -49,7 +51,7 @@ def _api(cfg: dict, path: str, body: dict | None = None):
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(_url(cfg, path), data=data, method="GET" if body is None else "PUT")
     req.add_header("Content-Type", "application/json")
-    req.add_header("X-UniHub", "1")
+    req.add_header("X-Louver", "1")
     with urllib.request.urlopen(req, timeout=5) as r:
         return json.loads(r.read())
 
@@ -60,7 +62,7 @@ def cmd_daemon(args, cfg: dict, path: Path) -> int:
 
     lock = None
     if not args.demo:  # the demo touches no hardware, so it may run alongside
-        lock = _hardware_lock("unihub daemon", "Check it with: systemctl --user status unihub")
+        lock = _hardware_lock("louver daemon", "Check it with: systemctl --user status louver")
         if lock is None:
             return ALREADY_RUNNING
     if args.demo:
@@ -72,6 +74,12 @@ def cmd_daemon(args, cfg: dict, path: Path) -> int:
         from .mbfans import MotherboardFans
 
         ctrl = Controller(cfg, path, SensorHub(), mbfans=MotherboardFans())
+    try:
+        httpd = serve(ctrl, args.listen or cfg["listen"])
+    except OSError as e:
+        print(f"louver daemon: cannot listen on {args.listen or cfg['listen']}: {e.strerror or e}", file=sys.stderr)
+        return ALREADY_RUNNING if e.errno == 98 else 1  # EADDRINUSE
+    if not args.demo:  # only once we're really the running copy
         from . import autostart
 
         try:
@@ -85,11 +93,6 @@ def cmd_daemon(args, cfg: dict, path: Path) -> int:
 
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    try:
-        httpd = serve(ctrl, args.listen or cfg["listen"])
-    except OSError as e:
-        print(f"unihub daemon: cannot listen on {args.listen or cfg['listen']}: {e.strerror or e}", file=sys.stderr)
-        return ALREADY_RUNNING if e.errno == 98 else 1  # EADDRINUSE
     logging.info("UI at http://%s/", args.listen or cfg["listen"])
     try:
         ctrl.run_forever(stop)
@@ -112,7 +115,7 @@ def cmd_ui(args, cfg: dict, path: Path) -> int:
     try:
         import gi  # noqa: F401  (desktop app available?)
 
-        subprocess.Popen([sys.executable, "-m", "unihub", "app"], start_new_session=True,
+        subprocess.Popen([sys.executable, "-m", "louver", "app"], start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return 0
     except ImportError:
@@ -121,7 +124,7 @@ def cmd_ui(args, cfg: dict, path: Path) -> int:
     for browser in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "brave-browser", "microsoft-edge"):
         exe = shutil.which(browser)
         if exe:
-            subprocess.Popen([exe, f"--app={url}", "--class=unihub"], start_new_session=True,
+            subprocess.Popen([exe, f"--app={url}", "--class=louver"], start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return 0
     subprocess.Popen(["xdg-open", url], start_new_session=True)
@@ -161,7 +164,7 @@ def cmd_set(args, cfg: dict, path: Path) -> int:
 
 def cmd_probe(args, cfg: dict, path: Path) -> int:
     """Read-only: firmware + RPM. Sends only query commands."""
-    lock = _hardware_lock("unihub probe", "Its live readings are in: unihub status")
+    lock = _hardware_lock("louver probe", "Its live readings are in: louver status")
     if lock is None:
         return ALREADY_RUNNING
     rc = 1
@@ -214,7 +217,7 @@ def cmd_mb_test(args, cfg: dict, path: Path) -> int:
 
     from .mbfans import MotherboardFans
 
-    lock = _hardware_lock("unihub mb-test", "Stop it first so the two don't fight over the header: systemctl --user stop unihub")
+    lock = _hardware_lock("louver mb-test", "Stop it first so the two don't fight over the header: systemctl --user stop louver")
     if lock is None:
         return ALREADY_RUNNING
     mb = MotherboardFans()
@@ -238,8 +241,8 @@ def cmd_mb_test(args, cfg: dict, path: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="unihub", description="Lian Li UNI HUB control for Linux")
-    p.add_argument("--config", type=Path, default=None, help="config file (default ~/.config/unihub/config.json)")
+    p = argparse.ArgumentParser(prog="louver", description="Lian Li UNI HUB control for Linux")
+    p.add_argument("--config", type=Path, default=None, help="config file (default ~/.config/louver/config.json)")
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="cmd", required=True)
     d = sub.add_parser("daemon")
@@ -262,6 +265,12 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     path = args.config or cfgmod.default_path()
+    if args.config is None:
+        try:
+            if cfgmod.migrate_legacy(path):
+                logging.info("copied the UniHub config to %s", path)
+        except OSError as e:
+            logging.warning("could not copy the old UniHub config: %s", e)
     try:
         cfg = cfgmod.load(path)
     except cfgmod.ConfigError as e:

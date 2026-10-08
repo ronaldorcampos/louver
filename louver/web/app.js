@@ -14,7 +14,7 @@ let saveTimer = null, dragging = false, editSeq = 0;
 async function api(path, body) {
   const opts = body === undefined ? {} : {
     method: "PUT", body: JSON.stringify(body),
-    headers: { "Content-Type": "application/json", "X-UniHub": "1" },
+    headers: { "Content-Type": "application/json", "X-Louver": "1" },
   };
   const r = await fetch(path, opts);
   const j = await r.json();
@@ -376,7 +376,7 @@ function lightingEditor(kind, ctx) {
 
   return el("div", {},
     el("h3", {}, "Hardware effects"), el("div", { class: "effects" }, ...hw.map(effectBtn)),
-    el("h3", {}, "Software effects ", el("small", {}, "rendered per-LED by UniHub")), el("div", { class: "effects" }, ...sw.map(effectBtn)),
+    el("h3", {}, "Software effects ", el("small", {}, "rendered per-LED by Louver")), el("div", { class: "effects" }, ...sw.map(effectBtn)),
     panel);
 }
 
@@ -547,7 +547,7 @@ async function poll() {
     renderPorts();
     if (!dragging) drawCurve();
   } catch (e) {
-    $("banner").textContent = "UniHub daemon not reachable.";
+    $("banner").textContent = "Louver daemon not reachable.";
     $("banner").classList.remove("hidden");
   }
 }

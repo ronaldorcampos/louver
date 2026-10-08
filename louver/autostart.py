@@ -1,4 +1,4 @@
-"""Login autostart for the UniHub window/tray (XDG autostart entry).
+"""Login autostart for the Louver window/tray (XDG autostart entry).
 
 Fan control itself starts via the systemd user service; this only decides
 whether the desktop app (tray icon) comes up at login.
@@ -10,30 +10,37 @@ import os
 import shutil
 from pathlib import Path
 
-MARKER = "X-UniHub-Managed=true"
+from .gui_ids import APP_ID
+
+MARKER = "X-Louver-Managed=true"
+# The entry this app wrote under its previous name, UniHub.
+LEGACY_ENTRY, LEGACY_MARKER = "unihub.desktop", "X-UniHub-Managed=true"
 
 
 def entry_path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return Path(base) / "autostart" / "unihub.desktop"
+    return Path(base) / "autostart" / "louver.desktop"
 
 
 def _launcher() -> str:
-    local = Path.home() / ".local" / "bin" / "unihub"
-    return str(local) if local.exists() else (shutil.which("unihub") or "unihub")
+    local = Path.home() / ".local" / "bin" / "louver"
+    return str(local) if local.exists() else (shutil.which("louver") or "louver")
 
 
 def sync(enabled: bool, path: Path | None = None, launcher: str | None = None) -> None:
     path = path or entry_path()
+    legacy = path.parent / LEGACY_ENTRY
+    if legacy.exists() and LEGACY_MARKER in legacy.read_text(errors="replace"):
+        legacy.unlink()  # its Exec= points at the old launcher, which is gone
     if enabled:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             "[Desktop Entry]\n"
             "Type=Application\n"
-            "Name=UniHub\n"
+            "Name=Louver\n"
             "Comment=Lian Li fan and RGB control (tray)\n"
             f"Exec={launcher or _launcher()} app --autostart\n"
-            "Icon=unihub\n"
+            f"Icon={APP_ID}\n"
             "Terminal=false\n"
             "X-GNOME-Autostart-enabled=true\n"
             f"{MARKER}\n"

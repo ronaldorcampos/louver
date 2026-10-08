@@ -1,6 +1,6 @@
 import pytest
 
-from unihub.devices import LightingEffect, StrimerPlus, UniHubALV2
+from louver.devices import LightingEffect, StrimerPlus, UniHubALV2
 
 from .fakes import Z, HUB_RESPONSES, STRIMER_RESPONSES, FakeTransport
 

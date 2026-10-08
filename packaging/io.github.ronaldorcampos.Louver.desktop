@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=UniHub
+Name=Louver
 GenericName=Fan & RGB Control
 Comment=Control Lian Li UNI HUB fans and lighting
-Exec=unihub app
-Icon=unihub
+Exec=louver app
+Icon=io.github.ronaldorcampos.Louver
 Terminal=false
 Categories=Utility;System;Settings;HardwareSettings;
 Keywords=fan;rgb;lian li;l-connect;uni hub;strimer;
-StartupWMClass=io.github.unihub
+StartupWMClass=io.github.ronaldorcampos.Louver

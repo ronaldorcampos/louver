@@ -5,10 +5,10 @@ import urllib.request
 
 import pytest
 
-from unihub import config as cfgmod
-from unihub.curves import Governor, interpolate, normalize
-from unihub.daemon import Controller, serve
-from unihub.devices import StrimerPlus, UniHubALV2
+from louver import config as cfgmod
+from louver.curves import Governor, interpolate, normalize
+from louver.daemon import Controller, serve
+from louver.devices import StrimerPlus, UniHubALV2
 
 from .fakes import Z, HUB_RESPONSES, STRIMER_RESPONSES, FakeSensors, FakeTransport
 
@@ -202,24 +202,24 @@ def test_http_state_and_static(server):
     code, st = _req(port, "/api/state")
     assert code == 200 and st["hub"]["connected"]
     code, html = _req(port, "/")
-    assert code == 200 and b"UniHub" in html
+    assert code == 200 and b"Louver" in html
     assert _req(port, "/../../etc/passwd")[0] == 404
 
 
 def test_http_rejects_foreign_host_and_missing_header(server):
     r, port = server
     assert _req(port, "/api/state", host="evil.example:80")[0] == 403
-    assert _req(port, "/api/config", body=r.ctrl.cfg)[0] == 403  # no X-UniHub header
+    assert _req(port, "/api/config", body=r.ctrl.cfg)[0] == 403  # no X-Louver header
 
 
 def test_http_put_config_validates(server):
     r, port = server
     cfg = json.loads(json.dumps(r.ctrl.cfg))
     cfg["hub"]["groups"][0]["mode"] = "turbo"
-    code, err = _req(port, "/api/config", body=cfg, headers={"X-UniHub": "1"})
+    code, err = _req(port, "/api/config", body=cfg, headers={"X-Louver": "1"})
     assert code == 400 and "mode" in err["error"]
     cfg["hub"]["groups"][0]["mode"] = "full"
-    code, new = _req(port, "/api/config", body=cfg, headers={"X-UniHub": "1"})
+    code, new = _req(port, "/api/config", body=cfg, headers={"X-Louver": "1"})
     assert code == 200 and new["hub"]["groups"][0]["mode"] == "full"
     assert r.speeds()[0] == 100
 
@@ -242,12 +242,12 @@ def test_partially_unreadable_composite_sensor_is_reported():
 
 
 def test_autostart_entry_managed_and_only_removes_its_own(tmp_path):
-    from unihub import autostart
+    from louver import autostart
 
-    p = tmp_path / "autostart" / "unihub.desktop"
-    autostart.sync(True, p, launcher="/x/unihub")
+    p = tmp_path / "autostart" / "louver.desktop"
+    autostart.sync(True, p, launcher="/x/louver")
     text = p.read_text()
-    assert "Exec=/x/unihub app --autostart" in text and autostart.MARKER in text
+    assert "Exec=/x/louver app --autostart" in text and autostart.MARKER in text
     autostart.sync(False, p)
     assert not p.exists()
     p.write_text("[Desktop Entry]\nExec=something-the-user-made\n")

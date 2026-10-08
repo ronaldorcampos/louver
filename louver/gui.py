@@ -1,6 +1,6 @@
-"""UniHub desktop shell: app window (WebKitGTK) + tray icon (AppIndicator).
+"""Louver desktop shell: app window (WebKitGTK) + tray icon (AppIndicator).
 
-Fan and RGB control live in the daemon (``unihub daemon``, a systemd user
+Fan and RGB control live in the daemon (``louver daemon``, a systemd user
 service); this process is only the window and the tray. Quitting it never
 stops fan control.
 """
@@ -31,11 +31,12 @@ try:
 except (ValueError, ImportError):
     AppIndicator = None
 
-APP_ID = "io.github.unihub"
-ICON_DIR = Path(__file__).resolve().parent.parent / "packaging"
+from .gui_ids import APP_ID, TRAY_ICON  # noqa: E402
+
+ICON_DIR = Path(__file__).resolve().parent.parent / "packaging" / "icons" / "hicolor"  # running from a checkout
 
 
-class UniHubApp(Gtk.Application):
+class LouverApp(Gtk.Application):
     def __init__(self, base_url: str):
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.base = base_url.rstrip("/")
@@ -51,7 +52,7 @@ class UniHubApp(Gtk.Application):
             self.base + path,
             data=None if body is None else json.dumps(body).encode(),
             method="GET" if body is None else "PUT",
-            headers={"Content-Type": "application/json", "X-UniHub": "1"},
+            headers={"Content-Type": "application/json", "X-Louver": "1"},
         )
         with urllib.request.urlopen(req, timeout=3) as r:
             return json.loads(r.read())
@@ -100,11 +101,11 @@ class UniHubApp(Gtk.Application):
         self._sync_tray_visibility()
 
     def build_window(self) -> Gtk.Window:
-        win = Gtk.ApplicationWindow(application=self, title="UniHub")
+        win = Gtk.ApplicationWindow(application=self, title="Louver")
         win.set_default_size(1180, 820)
-        win.set_icon_name("unihub")
-        if not Gtk.IconTheme.get_default().has_icon("unihub"):
-            icon = ICON_DIR / "unihub.svg"
+        win.set_icon_name(APP_ID)
+        if not Gtk.IconTheme.get_default().has_icon(APP_ID):
+            icon = ICON_DIR / "scalable" / "apps" / f"{APP_ID}.svg"
             if icon.exists():
                 win.set_icon_from_file(str(icon))
         view = WebKit2.WebView()
@@ -131,8 +132,8 @@ class UniHubApp(Gtk.Application):
     def _load_failed(self, view, event, uri, error):
         view.load_html(
             "<body style='font-family:sans-serif;background:#0f1115;color:#e7e9ee;padding:40px'>"
-            "<h2>UniHub service isn't running</h2><p>Start it with "
-            "<code>systemctl --user start unihub</code>. Retrying…</p></body>",
+            "<h2>Louver service isn't running</h2><p>Start it with "
+            "<code>systemctl --user start louver</code>. Retrying…</p></body>",
             None,
         )
         GLib.timeout_add_seconds(3, lambda: view.load_uri(self.base + "/") or False)  # one-shot retry
@@ -151,12 +152,12 @@ class UniHubApp(Gtk.Application):
     def build_tray(self) -> None:
         if AppIndicator is None:
             return
-        ind = AppIndicator.Indicator.new("unihub", "unihub", AppIndicator.IndicatorCategory.HARDWARE)
-        if not Gtk.IconTheme.get_default().has_icon("unihub"):
-            ind.set_icon_theme_path(str(ICON_DIR))
-        ind.set_title("UniHub")
+        ind = AppIndicator.Indicator.new("louver", TRAY_ICON, AppIndicator.IndicatorCategory.HARDWARE)
+        if not Gtk.IconTheme.get_default().has_icon(TRAY_ICON):
+            ind.set_icon_theme_path(str(ICON_DIR / "symbolic" / "apps"))
+        ind.set_title("Louver")
         menu = Gtk.Menu()
-        open_item = Gtk.MenuItem(label="Open UniHub")
+        open_item = Gtk.MenuItem(label="Open Louver")
         open_item.connect("activate", self.show_window)
         menu.append(open_item)
         self.status_item = Gtk.MenuItem(label="Connecting…")
@@ -213,11 +214,11 @@ class UniHubApp(Gtk.Application):
                 parts.append(f"{gc['name']} {g['rpm']} rpm")
         if not st["hub"]["connected"]:
             parts = ["Hub disconnected"]
-        self.status_item.set_label(" · ".join(parts) or "UniHub")
+        self.status_item.set_label(" · ".join(parts) or "Louver")
         return True
 
 
 
 def run(base_url: str, argv: list[str]) -> int:
-    app = UniHubApp(base_url)
+    app = LouverApp(base_url)
     return app.run([sys.argv[0], *argv])
