@@ -48,7 +48,12 @@ sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw
 systemctl --user enable --now unihub
 ```
 
-Then open **UniHub** from the app menu, or run `unihub ui`. The UI is
+Then open **UniHub** from the app menu, or run `unihub app`. The desktop app is
+a window plus a tray icon (GTK3, WebKit2GTK 4.1 and AyatanaAppIndicator via
+`python3-gi`; on GNOME the AppIndicator extension must be enabled, as it is on
+Ubuntu). **Settings → Application** has start on login, start minimized,
+minimize to tray on close, and show tray icon. Quitting the app never stops
+fan control: that's the `unihub` service. The UI is
 served on `http://127.0.0.1:47321/` and only accepts connections from this machine.
 
 To keep fan control running when nobody is logged in: `loginctl enable-linger $USER`.

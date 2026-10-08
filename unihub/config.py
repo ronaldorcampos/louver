@@ -63,6 +63,8 @@ DEFAULTS: dict = {
     },
     "theme": None,
     "ui": {"show_empty_ports": False},
+    # Desktop app (window + tray). Fan control runs regardless, as a service.
+    "app": {"start_on_login": False, "start_minimized": True, "close_to_tray": True, "show_tray": True},
     # Opt-in per header: [{"index": 2, "name": ..., "mode": "bios"|..., ...}]
     "motherboard": {"headers": []},
 }
@@ -138,6 +140,9 @@ def validate(cfg: dict) -> dict:
         except (ValueError, TypeError) as e:
             raise ConfigError(f"group {i}: bad curve: {e}") from None
         groups[i] = full
+    for key, val in cfg["app"].items():
+        if key not in DEFAULTS["app"] or not isinstance(val, bool):
+            raise ConfigError(f"app.{key}: must be one of {sorted(DEFAULTS['app'])} with a true/false value")
     seen = set()
     headers = cfg["motherboard"]["headers"]
     for k, h in enumerate(headers):

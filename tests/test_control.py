@@ -239,3 +239,26 @@ def test_partially_unreadable_composite_sensor_is_reported():
     g = r.ctrl.state()["hub"]["groups"]
     assert g[3]["missing"] == ["gpu"] and not g[3]["failsafe"]
     assert g[0]["missing"] == []
+
+
+def test_autostart_entry_managed_and_only_removes_its_own(tmp_path):
+    from unihub import autostart
+
+    p = tmp_path / "autostart" / "unihub.desktop"
+    autostart.sync(True, p, launcher="/x/unihub")
+    text = p.read_text()
+    assert "Exec=/x/unihub app --autostart" in text and autostart.MARKER in text
+    autostart.sync(False, p)
+    assert not p.exists()
+    p.write_text("[Desktop Entry]\nExec=something-the-user-made\n")
+    autostart.sync(False, p)
+    assert p.exists()  # not ours: left alone
+
+
+def test_app_settings_validate():
+    cfg = cfgmod.validate({})
+    assert cfg["app"] == {"start_on_login": False, "start_minimized": True, "close_to_tray": True, "show_tray": True}
+    bad = cfgmod.validate({})
+    bad["app"]["show_tray"] = "yes"
+    with pytest.raises(cfgmod.ConfigError):
+        cfgmod.validate(bad)

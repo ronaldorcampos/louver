@@ -19,7 +19,9 @@ WRAP
 chmod +x "$bin/unihub"
 
 cp "$here/packaging/unihub.service" "$units/unihub.service"
-cp "$here/packaging/unihub.desktop" "$HOME/.local/share/applications/unihub.desktop"
+# Named after the app ID so GNOME matches the window (Wayland) to this entry.
+rm -f "$HOME/.local/share/applications/unihub.desktop"
+cp "$here/packaging/io.github.unihub.desktop" "$HOME/.local/share/applications/io.github.unihub.desktop"
 cp "$here/packaging/unihub.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/unihub.svg"
 
 systemctl --user daemon-reload

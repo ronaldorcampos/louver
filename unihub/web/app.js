@@ -515,7 +515,17 @@ function renderSettings() {
   $("set-exit-pct").value = cfg.on_exit_percent;
   $("exit-pct-row").classList.toggle("hidden", cfg.on_exit !== "fixed");
   $("set-show-empty").checked = cfg.ui.show_empty_ports;
+  document.querySelectorAll("[data-app]").forEach((inp) => { inp.checked = !!cfg.app[inp.dataset.app]; });
+  const trayOff = !cfg.app.show_tray;
+  for (const k of ["start_minimized", "close_to_tray"]) {
+    const inp = document.querySelector(`[data-app="${k}"]`);
+    inp.disabled = trayOff;  // both need somewhere to minimize to
+    inp.closest("label").style.opacity = trayOff ? 0.5 : 1;
+  }
 }
+document.querySelectorAll("[data-app]").forEach((inp) => inp.addEventListener("change", () => {
+  cfg.app[inp.dataset.app] = inp.checked; save(0); renderSettings();
+}));
 $("set-show-empty").addEventListener("change", (e) => { cfg.ui.show_empty_ports = e.target.checked; save(0); renderAll(); });
 $("set-poll").addEventListener("change", (e) => { cfg.poll_interval = +e.target.value; save(0); });
 $("set-min").addEventListener("change", (e) => { cfg.min_percent = +e.target.value; save(0); });

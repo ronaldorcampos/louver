@@ -101,6 +101,15 @@
     <!-- SETTINGS -->
     <section class="view hidden" id="view-settings">
       <h1>Settings</h1>
+      <h3>Application</h3>
+      <div class="panel settings" id="app-settings">
+        <label class="toggle"><input type="checkbox" data-app="start_on_login"><span></span>Start on login</label>
+        <label class="toggle"><input type="checkbox" data-app="start_minimized"><span></span>Start minimized to the tray</label>
+        <label class="toggle"><input type="checkbox" data-app="close_to_tray"><span></span>Minimize to tray when the window is closed</label>
+        <label class="toggle"><input type="checkbox" data-app="show_tray"><span></span>Show tray icon</label>
+        <p class="hint">Fan control runs as a background service either way; these only affect the window and the tray icon.</p>
+      </div>
+      <h3>Fan control</h3>
       <div class="panel settings">
         <label>Update interval (s) <input type="number" min="0.25" max="30" step="0.25" id="set-poll"></label>
         <label>Minimum fan speed (%) <input type="number" min="0" max="100" id="set-min"></label>

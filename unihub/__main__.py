@@ -1,7 +1,8 @@
 """unihub command line.
 
   unihub daemon            run fan control + the web UI (127.0.0.1:47321)
-  unihub ui                open the UI in an app-style browser window
+  unihub app [--autostart] the desktop app: window + tray icon
+  unihub ui                open the desktop app (falls back to a browser window)
   unihub status            show RPM / duty / temps from the running daemon
   unihub set PORT PERCENT  put a port in manual mode at PERCENT (via daemon)
   unihub probe             read-only hardware check, no daemon needed
@@ -54,6 +55,12 @@ def cmd_daemon(args, cfg: dict, path: Path) -> int:
         from .mbfans import MotherboardFans
 
         ctrl = Controller(cfg, path, SensorHub(), mbfans=MotherboardFans())
+        from . import autostart
+
+        try:
+            autostart.sync(cfg["app"]["start_on_login"])
+        except OSError as e:
+            logging.warning("autostart update failed: %s", e)
     stop = threading.Event()
 
     def _stop(*_):
@@ -71,7 +78,24 @@ def cmd_daemon(args, cfg: dict, path: Path) -> int:
     return 0
 
 
+def cmd_app(args, cfg: dict, path: Path) -> int:
+    try:
+        from . import gui
+    except (ImportError, ValueError) as e:
+        print(f"desktop app needs GTK3, WebKit2GTK 4.1 and AyatanaAppIndicator (python3-gi): {e}", file=sys.stderr)
+        return 1
+    return gui.run(_url(cfg, "/"), ["--autostart"] if args.autostart else [])
+
+
 def cmd_ui(args, cfg: dict, path: Path) -> int:
+    try:
+        import gi  # noqa: F401  (desktop app available?)
+
+        subprocess.Popen([sys.executable, "-m", "unihub", "app"], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return 0
+    except ImportError:
+        pass
     url = _url(cfg, "/")
     for browser in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "brave-browser", "microsoft-edge"):
         exe = shutil.which(browser)
@@ -195,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--listen", default=None)
     d.add_argument("--demo", action="store_true", help="simulate the hub and Strimer (no hardware access)")
     sub.add_parser("ui")
+    a = sub.add_parser("app")
+    a.add_argument("--autostart", action="store_true", help="launched at login: honour 'start minimized'")
     sub.add_parser("status")
     s = sub.add_parser("set")
     s.add_argument("port", type=int, choices=range(1, 5))
@@ -214,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     except cfgmod.ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         return 2
-    return {"daemon": cmd_daemon, "ui": cmd_ui, "status": cmd_status, "set": cmd_set, "probe": cmd_probe,
+    return {"daemon": cmd_daemon, "ui": cmd_ui, "status": cmd_status, "set": cmd_set, "probe": cmd_probe, "app": cmd_app,
             "mb-list": cmd_mb_list, "mb-test": cmd_mb_test}[args.cmd](
         args, cfg, path
     )

@@ -331,6 +331,13 @@ class Controller:
             self.cfg = new
             if self.cfg_path is not None:
                 cfgmod.save(new, self.cfg_path)
+                if old["app"]["start_on_login"] != new["app"]["start_on_login"]:
+                    from . import autostart
+
+                    try:
+                        autostart.sync(new["app"]["start_on_login"])
+                    except OSError as e:
+                        log.warning("autostart update failed: %s", e)
             hub = self.hub
             try:
                 if hub is not None:
