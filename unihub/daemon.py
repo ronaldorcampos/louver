@@ -1,0 +1,376 @@
+"""Control loop + local HTTP API/UI server."""
+
+from __future__ import annotations
+
+import copy
+import json
+import logging
+import threading
+import time
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Callable
+
+from . import config as cfgmod
+from .curves import PRESETS, Governor, interpolate
+from .devices import DRIVERS, VENDOR_ID, LightingEffect, StrimerPlus, UniHubALV2
+from .hidraw import HidrawTransport, enumerate_hidraw
+from .sensors import SensorHub
+
+log = logging.getLogger("unihub")
+
+WEB_DIR = Path(__file__).with_name("web")
+RECONNECT_EVERY = 5.0
+KEEPALIVE_EVERY = 10.0
+
+
+def open_devices(skip: frozenset[int] = frozenset()) -> dict[int, object]:
+    """Open every supported Lian Li controller not in ``skip``; keyed by PID."""
+    found: dict[int, object] = {}
+    first_error: OSError | None = None
+    for info in enumerate_hidraw():
+        if info.vid != VENDOR_ID or info.pid not in DRIVERS or info.pid in found or info.pid in skip:
+            continue
+        try:
+            found[info.pid] = DRIVERS[info.pid](HidrawTransport(info.devnode))
+        except OSError as e:
+            log.warning("cannot open %s: %s", info.devnode, e)
+            first_error = first_error or e
+            continue
+        log.info("opened %s at %s", DRIVERS[info.pid].NAME, info.devnode)
+    if not found and first_error is not None:
+        raise first_error
+    return found
+
+
+class Controller:
+    def __init__(
+        self,
+        cfg: dict,
+        cfg_path: Path | None,
+        sensors: SensorHub,
+        opener: Callable[[frozenset[int]], dict[int, object]] = open_devices,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        self.cfg = cfgmod.validate(cfg)
+        self.cfg_path = cfg_path
+        self.sensors = sensors
+        self._open = opener
+        self._clock = clock
+        self.lock = threading.RLock()
+        self.hub: UniHubALV2 | None = None
+        self.strimer: StrimerPlus | None = None
+        self.hub_firmware = ""
+        self.strimer_firmware = ""
+        self.error = ""
+        self._last_connect = -1e9
+        self._last_tick: float | None = None
+        self._governors = [Governor() for _ in range(4)]
+        self._sent: list[int | None] = [None] * 4
+        self._sent_at = [0.0] * 4
+        self.groups_state = [
+            {"rpm": 0, "percent": None, "temp": None, "target": None, "failsafe": False} for _ in range(4)
+        ]
+
+    # --- device lifecycle ---------------------------------------------------
+    def connect(self) -> None:
+        self._last_connect = self._clock()
+        held = frozenset(
+            pid for pid, dev in ((UniHubALV2.PID, self.hub), (StrimerPlus.PID, self.strimer)) if dev is not None
+        )
+        try:
+            devs = self._open(held)
+        except OSError as e:
+            self.error = str(e)
+            log.warning("open failed: %s", e)
+            return
+        self.error = ""
+        hub = devs.get(UniHubALV2.PID)
+        if hub is not None:
+            try:
+                self._init_hub(hub)  # type: ignore[arg-type]
+                self.hub = hub  # type: ignore[assignment]
+            except OSError as e:
+                self.error = f"hub init failed: {e}"
+                log.warning(self.error)
+                hub.close()  # type: ignore[attr-defined]
+        strimer = devs.get(StrimerPlus.PID)
+        if strimer is not None:
+            try:
+                self._init_strimer(strimer)  # type: ignore[arg-type]
+                self.strimer = strimer  # type: ignore[assignment]
+            except OSError as e:
+                log.warning("strimer init failed: %s", e)
+                strimer.close()  # type: ignore[attr-defined]
+
+    def _init_hub(self, hub: UniHubALV2) -> None:
+        fw = hub.read_firmware()
+        self.hub_firmware = fw.version if fw.valid_alv2 else f"{fw.version} (unrecognised id)"
+        hcfg = self.cfg["hub"]
+        for i, g in enumerate(hcfg["groups"]):
+            hub.set_fan_count(i, int(g["fans"]))
+            hub.set_mb_pwm_sync(i, g["mode"] == "mb_sync")
+        self._sent = [None] * 4
+        for gov in self._governors:
+            gov.reset()
+        self._push_hub_lighting(hub, range(4))
+
+    def _push_hub_lighting(self, hub: UniHubALV2, groups) -> None:
+        hcfg = self.cfg["hub"]
+        hub.set_mb_rgb_sync(bool(hcfg["mb_rgb_sync"]))
+        if hcfg["mb_rgb_sync"]:
+            return
+        for i in groups:
+            hub.set_lighting(i, LightingEffect.from_dict(hcfg["lighting"][i]))
+
+    def _init_strimer(self, s: StrimerPlus) -> None:
+        self.strimer_firmware = s.read_firmware()
+        s.read_channel2_ports()
+        self._push_strimer_lighting(s)
+
+    def _push_strimer_lighting(self, s: StrimerPlus) -> None:
+        scfg = self.cfg["strimer"]
+        if scfg["mb_rgb_sync"]:
+            s.set_mb_rgb_sync(True)
+        else:
+            s.set_lighting(LightingEffect.from_dict(scfg["lighting"]))
+
+    def _drop(self, which: str, err: Exception) -> None:
+        log.warning("%s I/O error, will reconnect: %s", which, err)
+        self.error = f"{which} disconnected: {err}"
+        dev = getattr(self, which)
+        if dev is not None:
+            try:
+                dev.close()
+            except OSError:
+                pass
+        setattr(self, which, None)
+
+    # --- control ------------------------------------------------------------
+    def target_for(self, i: int) -> tuple[float | None, float | None, bool]:
+        """(target percent or None for mb_sync, temp, failsafe)."""
+        g = self.cfg["hub"]["groups"][i]
+        mode = g["mode"]
+        if mode == "mb_sync":
+            return None, None, False
+        temp = self.sensors.read(g["sensor"])
+        if mode == "manual":
+            return float(g["manual_percent"]), temp, False
+        if temp is None:
+            return 100.0, None, True  # can't see the temperature: run flat out
+        points = g["curve"] if mode == "curve" else PRESETS[mode]
+        return interpolate(points, temp), temp, False
+
+    def tick(self) -> None:
+        with self.lock:
+            now = self._clock()
+            dt = 0.0 if self._last_tick is None else now - self._last_tick
+            self._last_tick = now
+            if (self.hub is None or self.strimer is None) and now - self._last_connect >= RECONNECT_EVERY:
+                self.connect()
+            floor = int(self.cfg["min_percent"])
+            for i in range(4):
+                target, temp, failsafe = self.target_for(i)
+                st = self.groups_state[i]
+                st.update(temp=temp, target=target, failsafe=failsafe)
+                if target is None:
+                    self._governors[i].reset()
+                    st["percent"] = None
+                    continue
+                target = max(target, float(floor))
+                gov = self._governors[i]
+                if self.cfg["hub"]["groups"][i]["mode"] == "manual":
+                    gov.reset()  # a fixed speed the user picked applies at once
+                pct = int(round(gov.step(target, dt)))
+                if failsafe:
+                    pct = 100
+                st["percent"] = pct
+                if self.hub is None:
+                    continue
+                if pct != self._sent[i] or now - self._sent_at[i] >= KEEPALIVE_EVERY:
+                    try:
+                        self.hub.set_speed(i, pct)
+                    except OSError as e:
+                        self._drop("hub", e)
+                        break
+                    self._sent[i], self._sent_at[i] = pct, now
+            if self.hub is not None:
+                try:
+                    for i, rpm in enumerate(self.hub.read_rpms()):
+                        self.groups_state[i]["rpm"] = rpm
+                except OSError as e:
+                    self._drop("hub", e)
+
+    # --- config -------------------------------------------------------------
+    def apply_config(self, new: dict) -> dict:
+        new = cfgmod.validate(new)
+        with self.lock:
+            old = self.cfg
+            self.cfg = new
+            if self.cfg_path is not None:
+                cfgmod.save(new, self.cfg_path)
+            hub = self.hub
+            try:
+                if hub is not None:
+                    relight = []
+                    for i in range(4):
+                        og, ng = old["hub"]["groups"][i], new["hub"]["groups"][i]
+                        if og["fans"] != ng["fans"]:
+                            hub.set_fan_count(i, int(ng["fans"]))
+                            relight.append(i)
+                        if og["mode"] != ng["mode"]:
+                            self._governors[i].reset()
+                        if (og["mode"] == "mb_sync") != (ng["mode"] == "mb_sync"):
+                            hub.set_mb_pwm_sync(i, ng["mode"] == "mb_sync")
+                            self._sent[i] = None
+                        if old["hub"]["lighting"][i] != new["hub"]["lighting"][i]:
+                            relight.append(i)
+                    if old["hub"]["mb_rgb_sync"] != new["hub"]["mb_rgb_sync"]:
+                        relight = list(range(4))
+                    if relight:
+                        self._push_hub_lighting(hub, sorted(set(relight)))
+            except OSError as e:
+                self._drop("hub", e)
+            try:
+                if self.strimer is not None and old["strimer"] != new["strimer"]:
+                    self._push_strimer_lighting(self.strimer)
+            except OSError as e:
+                self._drop("strimer", e)
+        self.tick()
+        return new
+
+    def state(self) -> dict:
+        with self.lock:
+            return {
+                "hub": {
+                    "connected": self.hub is not None,
+                    "name": UniHubALV2.NAME,
+                    "firmware": self.hub_firmware,
+                    "groups": copy.deepcopy(self.groups_state),
+                },
+                "strimer": {
+                    "connected": self.strimer is not None,
+                    "name": StrimerPlus.NAME,
+                    "firmware": self.strimer_firmware,
+                    "ports": self.strimer.port_count if self.strimer else 0,
+                },
+                "error": self.error,
+            }
+
+    def shutdown(self) -> None:
+        with self.lock:
+            if self.strimer is not None:
+                self.strimer.close()
+                self.strimer = None
+            hub = self.hub
+            if hub is None:
+                return
+            action = self.cfg["on_exit"]
+            try:
+                if action == "mb_sync":
+                    for i in range(4):
+                        hub.set_mb_pwm_sync(i, True)
+                elif action == "fixed":
+                    for i in range(4):
+                        if self.cfg["hub"]["groups"][i]["mode"] != "mb_sync":
+                            hub.set_speed(i, int(self.cfg["on_exit_percent"]))
+            except OSError as e:
+                log.warning("on-exit action failed: %s", e)
+            hub.close()
+            self.hub = None
+
+    def run_forever(self, stop: threading.Event) -> None:
+        while not stop.is_set():
+            try:
+                self.tick()
+            except Exception:  # never let one bad tick kill fan control
+                log.exception("tick failed")
+            stop.wait(float(self.cfg["poll_interval"]))
+
+
+def meta(ctrl: Controller) -> dict:
+    return {
+        "fan_modes": list(cfgmod.FAN_MODES),
+        "presets": PRESETS,
+        "hub_lighting_modes": UniHubALV2.lighting_modes(),
+        "strimer_lighting_modes": StrimerPlus.lighting_modes(),
+        "sensors": ctrl.sensors.list(),
+    }
+
+
+_STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
+_CTYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css"}
+
+
+def make_handler(ctrl: Controller, allowed_hosts: set[str]):
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "unihub"
+
+        def log_message(self, fmt, *args):  # quiet by default
+            log.debug("http: " + fmt, *args)
+
+        def _host_ok(self) -> bool:
+            # Blocks DNS-rebinding: only answer requests addressed to localhost.
+            return self.headers.get("Host", "") in allowed_hosts
+
+        def _send(self, code: int, body: bytes, ctype: str) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _json(self, code: int, obj) -> None:
+            self._send(code, json.dumps(obj).encode(), "application/json")
+
+        def do_GET(self):
+            if not self._host_ok():
+                return self._json(HTTPStatus.FORBIDDEN, {"error": "bad host"})
+            path = self.path.split("?", 1)[0]
+            if path == "/api/state":
+                return self._json(200, ctrl.state())
+            if path == "/api/config":
+                return self._json(200, ctrl.cfg)
+            if path == "/api/meta":
+                return self._json(200, meta(ctrl))
+            name = _STATIC.get(path)
+            if name is None:
+                return self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            f = WEB_DIR / name
+            self._send(200, f.read_bytes(), _CTYPES[f.suffix])
+
+        def do_PUT(self):
+            if not self._host_ok():
+                return self._json(HTTPStatus.FORBIDDEN, {"error": "bad host"})
+            # A custom header forces a CORS preflight, which we never grant,
+            # so other websites can't drive the fans through the browser.
+            if self.headers.get("X-UniHub") != "1":
+                return self._json(HTTPStatus.FORBIDDEN, {"error": "missing X-UniHub header"})
+            if self.path != "/api/config":
+                return self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            try:
+                n = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(min(n, 1 << 20)))
+                if not isinstance(body, dict):
+                    raise cfgmod.ConfigError("config must be an object")
+                new = ctrl.apply_config(body)
+            except (ValueError, cfgmod.ConfigError) as e:
+                return self._json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
+            return self._json(200, new)
+
+    return Handler
+
+
+def serve(ctrl: Controller, listen: str) -> ThreadingHTTPServer:
+    host, port_s = listen.rsplit(":", 1)
+    port = int(port_s)
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        raise ValueError("refusing to listen on a non-loopback address")
+    allowed = {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
+    httpd = ThreadingHTTPServer((host, port), make_handler(ctrl, allowed))
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, name="http", daemon=True).start()
+    return httpd

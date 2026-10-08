@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unihub"
+version = "0.1.0"
+description = "Linux control app for Lian Li UNI HUB AL V2 fans and Strimer Plus (L-Connect 3 style)"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+unihub = "unihub.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["unihub*"]
+
+[tool.setuptools.package-data]
+unihub = ["web/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
