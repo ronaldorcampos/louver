@@ -42,7 +42,7 @@ class UniHubApp(Gtk.Application):
         self.window: Gtk.Window | None = None
         self.indicator = None
         self.status_item: Gtk.MenuItem | None = None
-        self.app_cfg = {"show_tray": True, "close_to_tray": True, "start_minimized": True}
+        self.app_cfg = {"close_to_tray": True, "start_minimized": True}
         self._first = True
 
     # --- daemon API ---------------------------------------------------------
@@ -64,13 +64,15 @@ class UniHubApp(Gtk.Application):
         self._sync_tray_visibility()
 
     def _sync_tray_visibility(self) -> None:
+        """The tray icon only appears while the window is hidden: it is the
+        way back to a closed (or start-minimized) window, nothing more."""
         if self.indicator is not None:
-            on = self.app_cfg.get("show_tray", True)
-            self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE if on else AppIndicator.IndicatorStatus.PASSIVE)
+            hidden = self.window is None or not self.window.get_visible()
+            self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE if hidden else AppIndicator.IndicatorStatus.PASSIVE)
 
     @property
     def tray_on(self) -> bool:
-        return self.indicator is not None and bool(self.app_cfg.get("show_tray", True))
+        return self.indicator is not None
 
     # --- lifecycle ----------------------------------------------------------
     def do_command_line(self, cmdline):
@@ -95,6 +97,7 @@ class UniHubApp(Gtk.Application):
             self.window = self.build_window()
         self.window.show_all()
         self.window.present()
+        self._sync_tray_visibility()
 
     def build_window(self) -> Gtk.Window:
         win = Gtk.ApplicationWindow(application=self, title="UniHub")
@@ -139,6 +142,7 @@ class UniHubApp(Gtk.Application):
         self.refresh_settings()
         if self.tray_on and self.app_cfg.get("close_to_tray", True):
             win.hide()
+            self._sync_tray_visibility()
             return True  # keep the window (and its page state) for next time
         self.quit()
         return False

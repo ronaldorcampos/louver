@@ -257,8 +257,11 @@ def test_autostart_entry_managed_and_only_removes_its_own(tmp_path):
 
 def test_app_settings_validate():
     cfg = cfgmod.validate({})
-    assert cfg["app"] == {"start_on_login": False, "start_minimized": True, "close_to_tray": True, "show_tray": True}
+    assert cfg["app"] == {"start_on_login": False, "start_minimized": True, "close_to_tray": True}
+    legacy = cfgmod.validate({})
+    legacy["app"]["show_tray"] = False
+    assert "show_tray" not in cfgmod.validate(legacy)["app"]  # retired key from older configs is dropped
     bad = cfgmod.validate({})
-    bad["app"]["show_tray"] = "yes"
+    bad["app"]["close_to_tray"] = "yes"
     with pytest.raises(cfgmod.ConfigError):
         cfgmod.validate(bad)

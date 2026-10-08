@@ -516,12 +516,6 @@ function renderSettings() {
   $("exit-pct-row").classList.toggle("hidden", cfg.on_exit !== "fixed");
   $("set-show-empty").checked = cfg.ui.show_empty_ports;
   document.querySelectorAll("[data-app]").forEach((inp) => { inp.checked = !!cfg.app[inp.dataset.app]; });
-  const trayOff = !cfg.app.show_tray;
-  for (const k of ["start_minimized", "close_to_tray"]) {
-    const inp = document.querySelector(`[data-app="${k}"]`);
-    inp.disabled = trayOff;  // both need somewhere to minimize to
-    inp.closest("label").style.opacity = trayOff ? 0.5 : 1;
-  }
 }
 document.querySelectorAll("[data-app]").forEach((inp) => inp.addEventListener("change", () => {
   cfg.app[inp.dataset.app] = inp.checked; save(0); renderSettings();
