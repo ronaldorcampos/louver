@@ -57,6 +57,10 @@ is closed. Quitting the app never stops
 fan control: that's the `unihub` service. The UI is
 served on `http://127.0.0.1:47321/` and only accepts connections from this machine.
 
+Only one copy runs at a time. Opening the app again brings the existing window
+forward. A second `unihub daemon` (or `probe` / `mb-test` while the service is up)
+exits with a message naming the running copy, so two processes never fight over the hub.
+
 To keep fan control running when nobody is logged in: `loginctl enable-linger $USER`.
 
 ### If you used uni-sync before

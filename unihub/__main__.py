@@ -25,8 +25,20 @@ import urllib.request
 from pathlib import Path
 
 from . import config as cfgmod
+from . import instance
 from .devices import DRIVERS, VENDOR_ID, StrimerPlus, UniHubALV2
 from .hidraw import HidrawTransport, enumerate_hidraw
+
+ALREADY_RUNNING = 3  # the unit's RestartPreventExitStatus: don't retry against a running copy
+
+
+def _hardware_lock(what: str, hint: str):
+    """Take the one-process-at-a-time hardware lock, or explain who holds it."""
+    lock = instance.acquire()
+    if lock is None:
+        pid = instance.holder()
+        print(f"{what}: UniHub is already running{f' (pid {pid})' if pid else ''}. {hint}", file=sys.stderr)
+    return lock
 
 
 def _url(cfg: dict, path: str) -> str:
@@ -46,6 +58,11 @@ def cmd_daemon(args, cfg: dict, path: Path) -> int:
     from .daemon import Controller, serve
     from .sensors import SensorHub
 
+    lock = None
+    if not args.demo:  # the demo touches no hardware, so it may run alongside
+        lock = _hardware_lock("unihub daemon", "Check it with: systemctl --user status unihub")
+        if lock is None:
+            return ALREADY_RUNNING
     if args.demo:
         from .sim import open_sim
 
@@ -68,7 +85,11 @@ def cmd_daemon(args, cfg: dict, path: Path) -> int:
 
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    httpd = serve(ctrl, args.listen or cfg["listen"])
+    try:
+        httpd = serve(ctrl, args.listen or cfg["listen"])
+    except OSError as e:
+        print(f"unihub daemon: cannot listen on {args.listen or cfg['listen']}: {e.strerror or e}", file=sys.stderr)
+        return ALREADY_RUNNING if e.errno == 98 else 1  # EADDRINUSE
     logging.info("UI at http://%s/", args.listen or cfg["listen"])
     try:
         ctrl.run_forever(stop)
@@ -140,6 +161,9 @@ def cmd_set(args, cfg: dict, path: Path) -> int:
 
 def cmd_probe(args, cfg: dict, path: Path) -> int:
     """Read-only: firmware + RPM. Sends only query commands."""
+    lock = _hardware_lock("unihub probe", "Its live readings are in: unihub status")
+    if lock is None:
+        return ALREADY_RUNNING
     rc = 1
     for info in enumerate_hidraw():
         if info.vid != VENDOR_ID or info.pid not in DRIVERS:
@@ -190,6 +214,9 @@ def cmd_mb_test(args, cfg: dict, path: Path) -> int:
 
     from .mbfans import MotherboardFans
 
+    lock = _hardware_lock("unihub mb-test", "Stop it first so the two don't fight over the header: systemctl --user stop unihub")
+    if lock is None:
+        return ALREADY_RUNNING
     mb = MotherboardFans()
     if args.header not in mb.headers:
         print(f"no header {args.header}; have {sorted(mb.headers)}", file=sys.stderr)
