@@ -78,6 +78,15 @@ function mbEntry(index) {
 const selCfg = () => (sel.kind === "hub" ? cfg.hub.groups[sel.i] : mbEntry(sel.i));
 const selState = () => (sel.kind === "hub" ? state?.hub.groups[sel.i] : state?.motherboard.headers.find((h) => h.index === sel.i));
 
+// Hub ports with 0 fans are hidden unless Settings says otherwise.
+const visiblePorts = () => cfg.hub.groups.map((g, i) => [g, i]).filter(([g]) => g.fans > 0 || cfg.ui.show_empty_ports);
+function ensureVisibleSelection() {
+  const vis = visiblePorts().map(([, i]) => i);
+  if (sel.kind === "hub" && !vis.includes(sel.i) && vis.length) sel = { kind: "hub", i: vis[0] };
+  if (lightPort !== 4 && !vis.includes(lightPort) && vis.length) lightPort = vis[0];
+  if (!vis.includes(lab.group) && vis.length) lab.group = vis[0];
+}
+
 function portCard(g, s, selected, onclick, sub) {
   const pct = s.percent;
   const card = el("button", { class: "port" + (selected ? " sel" : ""), onclick },
@@ -112,12 +121,13 @@ function renderMbPorts() {
 
 function renderPorts() {
   const box = $("ports");
-  box.replaceChildren(...cfg.hub.groups.map((g, i) => portCard(g, state?.hub.groups[i] || {}, sel.kind === "hub" && sel.i === i,
+  box.replaceChildren(...visiblePorts().map(([g, i]) => portCard(g, state?.hub.groups[i] || {}, sel.kind === "hub" && sel.i === i,
     () => { sel = { kind: "hub", i }; renderFans(); }, " · " + g.fans + " fan" + (g.fans === 1 ? "" : "s"))));
   renderMbPorts();
 }
 
 function renderFans() {
+  ensureVisibleSelection();
   renderPorts();
   const g = selCfg();
   const isMb = sel.kind === "mb";
@@ -448,7 +458,8 @@ function editLight({ rerender = true, delay = 0 } = {}) {
 
 function renderHubLighting() {
   renderThemes($("hub-themes"));
-  $("light-ports").replaceChildren(...[...cfg.hub.groups.map((g) => g.name), "All ports"].map((name, i) =>
+  ensureVisibleSelection();
+  $("light-ports").replaceChildren(...[...visiblePorts().map(([g, i]) => [g.name, i]), ["All ports", 4]].map(([name, i]) =>
     el("button", { class: i === lightPort ? "on" : "", onclick: () => { lightPort = i; renderHubLighting(); } }, name)));
   $("hub-mbsync").checked = cfg.hub.mb_rgb_sync;
   const box = $("hub-light-controls");
@@ -503,7 +514,9 @@ function renderSettings() {
   $("set-exit").value = cfg.on_exit;
   $("set-exit-pct").value = cfg.on_exit_percent;
   $("exit-pct-row").classList.toggle("hidden", cfg.on_exit !== "fixed");
+  $("set-show-empty").checked = cfg.ui.show_empty_ports;
 }
+$("set-show-empty").addEventListener("change", (e) => { cfg.ui.show_empty_ports = e.target.checked; save(0); renderAll(); });
 $("set-poll").addEventListener("change", (e) => { cfg.poll_interval = +e.target.value; save(0); });
 $("set-min").addEventListener("change", (e) => { cfg.min_percent = +e.target.value; save(0); });
 $("set-exit").addEventListener("change", (e) => { cfg.on_exit = e.target.value; save(0); renderSettings(); });
@@ -558,6 +571,7 @@ async function labSend() {
 }
 
 function renderLab() {
+  ensureVisibleSelection();
   const p = $("lab-panel");
   const num = el("input", { type: "number", min: 0, max: 255, value: lab.mode });
   num.addEventListener("change", () => { lab.mode = clamp(+num.value || 0, 0, 255); labSend(); renderLab(); });
@@ -570,7 +584,7 @@ function renderLab() {
     save(0); renderLab();
   } }, "Save label");
   p.replaceChildren(
-    field("Port", seg(cfg.hub.groups.map((g, i) => [i, g.name]), lab.group, (v) => { lab.group = v; labSend(); renderLab(); })),
+    field("Port", seg(visiblePorts().map(([g, i]) => [i, g.name]), lab.group, (v) => { lab.group = v; labSend(); renderLab(); })),
     field("Ring", seg([["inner", "Inner (fan)"], ["outer", "Outer (edge)"]], lab.ring, (v) => { lab.ring = v; labSend(); renderLab(); })),
     field("Effect #", el("div", { class: "lab-num" },
       el("button", { class: "btn", onclick: step(-1) }, "◀ Prev"), num, el("button", { class: "btn", onclick: step(1) }, "Next ▶"))),

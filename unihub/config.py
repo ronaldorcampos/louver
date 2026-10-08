@@ -62,6 +62,7 @@ DEFAULTS: dict = {
         "ports": [_default_light() for _ in range(STRIMER_PORTS)],
     },
     "theme": None,
+    "ui": {"show_empty_ports": False},
     # Opt-in per header: [{"index": 2, "name": ..., "mode": "bios"|..., ...}]
     "motherboard": {"headers": []},
 }
