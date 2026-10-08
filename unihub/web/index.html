@@ -15,6 +15,7 @@
         <div class="nav-dev-title"><span class="dot" id="hub-dot"></span>UNI HUB AL V2</div>
         <button class="nav-item active" data-view="fans">Fan Speed</button>
         <button class="nav-item" data-view="lighting">Lighting</button>
+        <button class="nav-item" data-view="lab">Lighting Lab</button>
       </div>
       <div class="nav-device">
         <div class="nav-dev-title"><span class="dot" id="strimer-dot"></span>Strimer Plus</div>
@@ -64,6 +65,17 @@
         <label class="toggle"><input type="checkbox" id="hub-mbsync"><span></span>Motherboard ARGB sync</label>
       </div>
       <div id="hub-light-controls"></div>
+    </section>
+
+    <!-- LIGHTING LAB -->
+    <section class="view hidden" id="view-lab">
+      <h1>Lighting Lab</h1>
+      <p class="hint">Hub firmware revisions number their effects differently. Step through effect numbers here,
+        watch the fans, and label what you see; labelled numbers replace the built-in guesses everywhere else.
+        Normal lighting returns when you press Done.</p>
+      <div class="panel light-panel" id="lab-panel"></div>
+      <h3>Verified effects</h3>
+      <div class="panel" id="lab-map"></div>
     </section>
 
     <!-- STRIMER -->

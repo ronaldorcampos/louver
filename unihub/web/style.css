@@ -127,6 +127,13 @@ h3 small { text-transform: none; letter-spacing: 0; font-weight: 400; }
 .led { stroke: var(--line); stroke-width: 1; cursor: crosshair; }
 .led:hover { stroke: var(--text); stroke-width: 2; }
 .strip { width: 100%; background: var(--panel-2); border-radius: 8px; touch-action: none; }
+.lab-num { display: flex; align-items: center; gap: 8px; }
+.lab-num input { width: 80px; font-size: 18px; text-align: center; }
+.map-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.map-table td, .map-table th { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+.map-table th { color: var(--muted); font-weight: 500; }
+.map-table .v { color: var(--ok); }
+.map-table .g { color: var(--muted); }
 .thermo.cold { color: #4f9dff; }
 .thermo.hot { color: #ff6a4f; }
 

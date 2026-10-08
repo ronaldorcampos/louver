@@ -482,7 +482,7 @@ function renderStatus() {
   b.classList.toggle("hidden", !msg);
 }
 
-function renderAll() { renderFans(); renderHubLighting(); renderStrimer(); renderSettings(); }
+function renderAll() { renderFans(); renderHubLighting(); renderStrimer(); renderSettings(); renderLab(); }
 
 async function poll() {
   try {
@@ -503,3 +503,55 @@ async function poll() {
   setInterval(poll, 1000);
   setInterval(async () => { meta.sensors = (await api("/api/meta")).sensors; }, 15000);
 })();
+
+// ---------------- lighting lab ----------------
+const lab = { group: 2, ring: "inner", mode: 1, speed: 2, palette: "rainbow" };
+const LAB_PALETTES = {
+  rainbow: ["#ff0000", "#ffd400", "#00ff6a", "#0088ff", "#b000ff", "#ff00c8"],
+  "red/blue": ["#ff0000", "#0000ff"],
+  white: ["#ffffff"],
+};
+
+async function labSend() {
+  try {
+    await api("/api/lab", { action: "show", group: lab.group, ring: lab.ring, mode: lab.mode, speed: lab.speed, colors: LAB_PALETTES[lab.palette] });
+  } catch (e) { toast("Lab: " + e.message); }
+}
+
+function renderLab() {
+  const p = $("lab-panel");
+  const num = el("input", { type: "number", min: 0, max: 255, value: lab.mode });
+  num.addEventListener("change", () => { lab.mode = clamp(+num.value || 0, 0, 255); labSend(); renderLab(); });
+  const step = (d) => () => { lab.mode = clamp(lab.mode + d, 0, 255); labSend(); renderLab(); };
+  const names = [...new Set(meta.hub_lighting_modes.filter((m) => !m.software && m[lab.ring] !== false).map((m) => m.name))];
+  const pick = el("select", {}, el("option", { value: "" }, "— it looks like… —"), ...names.map((n) => el("option", { value: n }, n)));
+  const saveBtn = el("button", { class: "btn", onclick: () => {
+    if (!pick.value) return toast("Pick which effect this looks like first");
+    cfg.hub.mode_map[lab.ring][pick.value] = lab.mode;
+    save(0); renderLab();
+  } }, "Save label");
+  p.replaceChildren(
+    field("Port", seg(cfg.hub.groups.map((g, i) => [i, g.name]), lab.group, (v) => { lab.group = v; labSend(); renderLab(); })),
+    field("Ring", seg([["inner", "Inner (fan)"], ["outer", "Outer (edge)"]], lab.ring, (v) => { lab.ring = v; labSend(); renderLab(); })),
+    field("Effect #", el("div", { class: "lab-num" },
+      el("button", { class: "btn", onclick: step(-1) }, "◀ Prev"), num, el("button", { class: "btn", onclick: step(1) }, "Next ▶"))),
+    field("Colours", seg(Object.keys(LAB_PALETTES).map((k) => [k, k]), lab.palette, (v) => { lab.palette = v; labSend(); renderLab(); })),
+    field("Speed", slider(0, 4, lab.speed, SPEED_LABELS, (v) => { lab.speed = v; labSend(); })),
+    field("Label", el("div", { class: "row gap" }, pick, saveBtn)),
+    el("div", { class: "row end" }, el("button", { class: "btn", onclick: async () => {
+      await api("/api/lab", { action: "end" }); toast("Normal lighting restored");
+    } }, "Done — restore my lighting")),
+  );
+
+  const rows = meta.hub_lighting_modes.filter((m) => !m.software).map((m) => {
+    const cell = (ring) => {
+      if (m[ring] === false) return el("td", { class: "g" }, "—");
+      const v = cfg.hub.mode_map[ring][m.name];
+      if (v === undefined) return el("td", { class: "g" }, "unverified");
+      return el("td", { class: "v" }, `#${v} ✓ `, el("button", { class: "btn small", onclick: () => { delete cfg.hub.mode_map[ring][m.name]; save(0); renderLab(); } }, "×"));
+    };
+    return el("tr", {}, el("td", {}, m.name), cell("inner"), cell("outer"));
+  });
+  $("lab-map").replaceChildren(el("table", { class: "map-table" },
+    el("tr", {}, el("th", {}, "Effect"), el("th", {}, "Inner ring"), el("th", {}, "Outer ring")), ...rows));
+}

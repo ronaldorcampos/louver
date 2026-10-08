@@ -50,6 +50,8 @@ DEFAULTS: dict = {
         "mb_rgb_sync": False,
         "groups": [_default_group(i) for i in range(4)],
         "lighting": [_default_light() for _ in range(4)],
+        # Effect numbers verified on this hub in the Lighting Lab: {"inner": {name: n}, "outer": {...}}
+        "mode_map": {"inner": {}, "outer": {}},
     },
     "strimer": {
         "mb_rgb_sync": False,
@@ -131,6 +133,17 @@ def validate(cfg: dict) -> dict:
         except (ValueError, TypeError) as e:
             raise ConfigError(f"group {i}: bad curve: {e}") from None
         groups[i] = full
+    mm = cfg["hub"]["mode_map"]
+    known = set(ALV2_INNER_MODES) | set(ALV2_OUTER_MODES)
+    for ring in ("inner", "outer"):
+        table = mm.get(ring, {})
+        if not isinstance(table, dict):
+            raise ConfigError(f"mode_map.{ring} must be an object")
+        for name, num in table.items():
+            if name not in known:
+                raise ConfigError(f"mode_map.{ring}: unknown effect {name!r}")
+            if not isinstance(num, int) or not 0 <= num <= 255:
+                raise ConfigError(f"mode_map.{ring}.{name}: must be an integer 0..255")
     lights = cfg["hub"]["lighting"]
     if len(lights) != 4:
         raise ConfigError("hub.lighting must have 4 entries")

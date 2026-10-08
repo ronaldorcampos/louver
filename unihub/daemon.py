@@ -72,6 +72,7 @@ class Controller:
         self._governors = [Governor() for _ in range(4)]
         self._sent: list[int | None] = [None] * 4
         self._sent_at = [0.0] * 4
+        self.lab_groups: set[int] = set()  # ports showing a Lighting Lab effect
         self._hub_temp_key: list[float | None] = [None] * 4
         self._strimer_temp_key: list[float | None] = [None] * 12
         self.groups_state = [
@@ -114,6 +115,8 @@ class Controller:
         fw = hub.read_firmware()
         self.hub_firmware = fw.version if fw.valid_alv2 else f"{fw.version} (unrecognised id)"
         hcfg = self.cfg["hub"]
+        hub.set_mode_overrides(hcfg["mode_map"]["inner"], hcfg["mode_map"]["outer"])
+        self.lab_groups.clear()
         for i, g in enumerate(hcfg["groups"]):
             hub.set_fan_count(i, int(g["fans"]))
             hub.set_mb_pwm_sync(i, g["mode"] == "mb_sync")
@@ -135,7 +138,8 @@ class Controller:
         if hcfg["mb_rgb_sync"]:
             return
         for i in groups:
-            self._push_hub_group(hub, i)
+            if i not in self.lab_groups:
+                self._push_hub_group(hub, i)
 
     def _push_hub_group(self, hub: UniHubALV2, i: int) -> None:
         entry = self.cfg["hub"]["lighting"][i]
@@ -185,6 +189,8 @@ class Controller:
         hub = self.hub
         if hub is not None and not self.cfg["hub"]["mb_rgb_sync"]:
             for i, entry in enumerate(self.cfg["hub"]["lighting"]):
+                if i in self.lab_groups:
+                    continue
                 if entry["mode"] == "Temperature" and self._temp_key(self._light_temp(entry)) != self._hub_temp_key[i]:
                     try:
                         self._push_hub_group(hub, i)
@@ -302,6 +308,10 @@ class Controller:
                             i for i, e in enumerate(new["hub"]["lighting"])
                             if e["mode"] == "Gradient" and e.get("span_all")
                         ]
+                    if old["hub"]["mode_map"] != new["hub"]["mode_map"]:
+                        mm = new["hub"]["mode_map"]
+                        hub.set_mode_overrides(mm["inner"], mm["outer"])
+                        relight = list(range(4))
                     if old["hub"]["mb_rgb_sync"] != new["hub"]["mb_rgb_sync"]:
                         relight = list(range(4))
                     if relight:
@@ -316,6 +326,36 @@ class Controller:
         self.tick()
         return new
 
+    # --- Lighting Lab -------------------------------------------------------
+    def lab_show(self, req: dict) -> None:
+        from .devices import parse_color
+
+        group = int(req.get("group", 0))
+        ring = req.get("ring", "inner")
+        if ring not in ("inner", "outer"):
+            raise cfgmod.ConfigError("ring must be inner or outer")
+        colors = [parse_color(c) for c in req.get("colors") or ["#ff0000", "#ffd400", "#00ff6a", "#0088ff", "#b000ff", "#ff00c8"]]
+        with self.lock:
+            if self.hub is None:
+                raise cfgmod.ConfigError("hub not connected")
+            try:
+                self.hub.raw_effect(group, ring, int(req.get("mode", 1)), colors,
+                                    speed=int(req.get("speed", 2)), direction=str(req.get("direction", "cw")),
+                                    brightness=int(req.get("brightness", 4)))
+            except OSError as e:
+                self._drop("hub", e)
+                raise cfgmod.ConfigError(f"hub I/O error: {e}") from None
+            self.lab_groups.add(group)
+
+    def lab_end(self) -> None:
+        with self.lock:
+            groups, self.lab_groups = sorted(self.lab_groups), set()
+            if self.hub is not None and groups:
+                try:
+                    self._push_hub_lighting(self.hub, groups)
+                except OSError as e:
+                    self._drop("hub", e)
+
     def state(self) -> dict:
         with self.lock:
             return {
@@ -324,6 +364,7 @@ class Controller:
                     "name": UniHubALV2.NAME,
                     "firmware": self.hub_firmware,
                     "groups": copy.deepcopy(self.groups_state),
+                    "lab": sorted(self.lab_groups),
                 },
                 "strimer": {
                     "connected": self.strimer is not None,
@@ -433,13 +474,19 @@ def make_handler(ctrl: Controller, allowed_hosts: set[str]):
             # so other websites can't drive the fans through the browser.
             if self.headers.get("X-UniHub") != "1":
                 return self._json(HTTPStatus.FORBIDDEN, {"error": "missing X-UniHub header"})
-            if self.path not in ("/api/config", "/api/theme"):
+            if self.path not in ("/api/config", "/api/theme", "/api/lab"):
                 return self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             try:
                 n = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(min(n, 1 << 20)))
                 if not isinstance(body, dict):
                     raise cfgmod.ConfigError("body must be an object")
+                if self.path == "/api/lab":
+                    if body.get("action") == "end":
+                        ctrl.lab_end()
+                    else:
+                        ctrl.lab_show(body)
+                    return self._json(200, ctrl.state())
                 if self.path == "/api/theme":
                     name = body.get("name")
                     if name not in THEMES:

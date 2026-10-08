@@ -184,6 +184,14 @@ class UniHubALV2(_Device):
     def __init__(self, transport: Transport, sleep: Callable[[float], None] = time.sleep, clock=time.monotonic):
         super().__init__(transport, sleep, clock)
         self.fan_counts = [3] * self.GROUPS
+        self.inner_modes = dict(ALV2_INNER_MODES)
+        self.outer_modes = dict(ALV2_OUTER_MODES)
+
+    def set_mode_overrides(self, inner: dict[str, int], outer: dict[str, int]) -> None:
+        """Replace reference mode numbers with ones verified on this hub
+        (firmware revisions disagree; v0.4 matches neither published table)."""
+        self.inner_modes = {**ALV2_INNER_MODES, **inner}
+        self.outer_modes = {**ALV2_OUTER_MODES, **outer}
 
     # --- info ---------------------------------------------------------------
     def read_firmware(self) -> Firmware:
@@ -241,16 +249,16 @@ class UniHubALV2(_Device):
 
     def set_lighting(self, group: int, effect: LightingEffect) -> None:
         self._check_group(group)
-        if effect.mode not in ALV2_INNER_MODES and effect.mode not in ALV2_OUTER_MODES:
+        if effect.mode not in self.inner_modes and effect.mode not in self.outer_modes:
             raise ValueError(f"unknown lighting mode {effect.mode!r}")
         speed = _speed_byte(effect.speed)
         bright = _brightness_byte(effect.brightness, off_value=8)
         direction = _direction_byte(effect.direction)
         rings = []
         if effect.ring in ("inner", "both") and effect.mode not in CORNER_MODES:
-            rings.append((group * 2, ALV2_INNER_MODES.get(effect.mode), self.INNER_LEDS))
+            rings.append((group * 2, self.inner_modes.get(effect.mode), self.INNER_LEDS))
         if effect.ring in ("outer", "both"):
-            rings.append((group * 2 + 1, ALV2_OUTER_MODES.get(effect.mode), self.OUTER_LEDS))
+            rings.append((group * 2 + 1, self.outer_modes.get(effect.mode), self.OUTER_LEDS))
         with self.lock:
             for port, mode_byte, leds in rings:
                 if mode_byte is None:
@@ -279,6 +287,26 @@ class UniHubALV2(_Device):
                     raise ValueError(f"expected {self.MAX_FANS * n} colours, got {len(leds)}")
                 self._output(bytes([0x30 | port]) + _encode_colors(leds))
                 self._feature(0x10 | port, ALV2_INNER_MODES["Static"], 0, 0, bright)
+            self._feature(0x10, 0x60, group + 1, self.fan_counts[group], 0x00)
+            self._feature(0x60, 0x00, 0x01)
+
+    def raw_effect(
+        self, group: int, ring: str, mode: int, colors: Sequence[Color], speed: int = 2,
+        direction: str = "cw", brightness: int = 4,
+    ) -> None:
+        """Lighting Lab: run an arbitrary effect number on one ring."""
+        self._check_group(group)
+        if not 0 <= mode <= 0xFF:
+            raise ValueError("mode must be 0..255")
+        port, leds = (group * 2, self.INNER_LEDS) if ring == "inner" else (group * 2 + 1, self.OUTER_LEDS)
+        pal = [colors[i % len(colors)] for i in range(self.PALETTE)] * self.MAX_FANS
+        per_led = [colors[f % len(colors)] for f in range(self.MAX_FANS) for _ in range(leds)]
+        # Static/Breathing (1, 2) read one colour per LED; effects read a palette.
+        buf = per_led if mode in (1, 2) else pal
+        with self.lock:
+            self._output(bytes([0x30 | port]) + _encode_colors(buf))
+            self._feature(0x10 | port, mode, _speed_byte(speed), _direction_byte(direction),
+                          _brightness_byte(brightness, off_value=8))
             self._feature(0x10, 0x60, group + 1, self.fan_counts[group], 0x00)
             self._feature(0x60, 0x00, 0x01)
 

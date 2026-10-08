@@ -119,3 +119,35 @@ def test_http_theme_endpoint(server):  # noqa: F811
     assert code == 400
     code, m = _req(port, "/api/meta")
     assert {t["name"] for t in m["themes"]} == set(THEMES)
+
+
+def test_mode_map_overrides_reference_numbers():
+    r = Rig()
+    r.ctrl.tick()
+    cfg = json.loads(json.dumps(r.ctrl.cfg))
+    cfg["hub"]["lighting"][0] = {"mode": "Rainbow", "ring": "both"}
+    cfg["hub"]["mode_map"] = {"inner": {"Rainbow": 40}, "outer": {"Rainbow": 5}}
+    r.hub_t.features.clear()
+    r.ctrl.apply_config(cfg)
+    assert bytes([0xE0, 0x10, 40, 0, 0, 0]) in r.hub_t.features
+    assert bytes([0xE0, 0x11, 5, 0, 0, 0]) in r.hub_t.features
+    bad = json.loads(json.dumps(cfg))
+    bad["hub"]["mode_map"]["inner"]["Nonsense"] = 3
+    with pytest.raises(cfgmod.ConfigError):
+        cfgmod.validate(bad)
+
+
+def test_lab_shows_raw_effect_and_is_not_overwritten_until_done():
+    r = Rig(temps={"cpu": 40.0})
+    r.ctrl.apply_config(apply_theme(r.ctrl.cfg, "Thermal"))
+    r.ctrl.tick()
+    r.hub_t.features.clear(); r.hub_t.outputs.clear()
+    r.ctrl.lab_show({"group": 2, "ring": "outer", "mode": 77, "speed": 4})
+    assert bytes([0xE0, 0x15, 77, 0xFE, 0, 0]) in r.hub_t.features
+    assert r.ctrl.state()["hub"]["lab"] == [2]
+    r.hub_t.outputs.clear()
+    r.sensors.values["cpu"] = 80.0  # Temperature lighting would re-render port 3 now...
+    r.ctrl.tick()
+    assert not any(o[1] in (0x34, 0x35) for o in r.hub_t.outputs)  # ...but the lab owns it
+    r.ctrl.lab_end()
+    assert any(o[1] == 0x35 for o in r.hub_t.outputs) and r.ctrl.state()["hub"]["lab"] == []
