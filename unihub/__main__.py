@@ -43,7 +43,13 @@ def cmd_daemon(args, cfg: dict, path: Path) -> int:
     from .daemon import Controller, serve
     from .sensors import SensorHub
 
-    ctrl = Controller(cfg, path, SensorHub())
+    if args.demo:
+        from .sim import open_sim
+
+        # Demo never touches real hardware or the real config file.
+        ctrl = Controller(cfg, None, SensorHub(), opener=open_sim)
+    else:
+        ctrl = Controller(cfg, path, SensorHub())
     stop = threading.Event()
 
     def _stop(*_):
@@ -141,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     d = sub.add_parser("daemon")
     d.add_argument("--listen", default=None)
+    d.add_argument("--demo", action="store_true", help="simulate the hub and Strimer (no hardware access)")
     sub.add_parser("ui")
     sub.add_parser("status")
     s = sub.add_parser("set")

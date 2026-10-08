@@ -1,0 +1,4 @@
+# Lian Li ENE-based controllers: UNI HUB SL/AL/SL-INF/SL V2/AL V2 (0xa100-0xa106)
+# and Strimer Plus (0xa200). Give the logged-in user (uaccess) and the
+# plugdev group read/write on their hidraw nodes so UniHub runs without root.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0cf2", ATTRS{idProduct}=="a10[0-6]|a200", MODE="0660", GROUP="plugdev", TAG+="uaccess"

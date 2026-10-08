@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=UniHub
+GenericName=Fan & RGB Control
+Comment=Control Lian Li UNI HUB fans and lighting
+Exec=unihub ui
+Icon=unihub
+Terminal=false
+Categories=Utility;System;Settings;HardwareSettings;
+Keywords=fan;rgb;lian li;l-connect;uni hub;strimer;
+StartupWMClass=unihub

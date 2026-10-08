@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "unihub-demo",
+      "runtimeExecutable": "/usr/bin/python3",
+      "runtimeArgs": ["-m", "unihub", "daemon", "--demo", "--listen", "127.0.0.1:47399"],
+      "port": 47399
+    }
+  ]
+}

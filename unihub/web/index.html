@@ -58,37 +58,26 @@
     <!-- HUB LIGHTING -->
     <section class="view hidden" id="view-lighting">
       <h1>Lighting</h1>
+      <div class="themes" id="hub-themes"></div>
       <div class="row between">
         <div class="seg" id="light-ports"></div>
         <label class="toggle"><input type="checkbox" id="hub-mbsync"><span></span>Motherboard ARGB sync</label>
       </div>
-      <div id="hub-light-controls">
-        <div class="effects" id="hub-effects"></div>
-        <div class="panel light-panel">
-          <div class="field"><span>Ring</span><div class="seg" id="ring-seg"></div></div>
-          <div class="field"><span>Colours</span><div class="colors" id="hub-colors"></div></div>
-          <div class="field"><span>Speed</span><input type="range" min="0" max="4" id="hub-speed"></div>
-          <div class="field"><span>Brightness</span><input type="range" min="-1" max="4" id="hub-bright"></div>
-          <div class="field"><span>Direction</span><div class="seg" id="hub-dir"></div></div>
-        </div>
-      </div>
+      <div id="hub-light-controls"></div>
     </section>
 
     <!-- STRIMER -->
     <section class="view hidden" id="view-strimer">
       <h1>Strimer Plus</h1>
-      <div class="row end">
+      <div class="themes" id="strimer-themes"></div>
+      <div class="row between">
+        <div class="row gap">
+          <label class="toggle"><input type="checkbox" id="strimer-perport"><span></span>Per-port control</label>
+          <div class="seg" id="strimer-ports"></div>
+        </div>
         <label class="toggle"><input type="checkbox" id="strimer-mbsync"><span></span>Motherboard ARGB sync</label>
       </div>
-      <div id="strimer-light-controls">
-        <div class="effects" id="strimer-effects"></div>
-        <div class="panel light-panel">
-          <div class="field"><span>Colours</span><div class="colors" id="strimer-colors"></div></div>
-          <div class="field"><span>Speed</span><input type="range" min="0" max="4" id="strimer-speed"></div>
-          <div class="field"><span>Brightness</span><input type="range" min="-1" max="4" id="strimer-bright"></div>
-          <div class="field"><span>Direction</span><div class="seg" id="strimer-dir"></div></div>
-        </div>
-      </div>
+      <div id="strimer-light-controls"></div>
     </section>
 
     <!-- SETTINGS -->

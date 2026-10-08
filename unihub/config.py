@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .curves import PRESETS, normalize
 from .devices import STRIMER_MODES, ALV2_INNER_MODES, ALV2_OUTER_MODES, parse_color
+from .rgbfx import SOFTWARE_MODES
 
 FAN_MODES = ("quiet", "standard", "high", "full", "manual", "curve", "mb_sync")
 EXIT_ACTIONS = ("mb_sync", "hold", "fixed")
@@ -31,7 +32,12 @@ def _default_group(i: int) -> dict:
 
 
 def _default_light() -> dict:
-    return {"mode": "Rainbow", "ring": "both", "colors": ["#ff0000"], "speed": 2, "brightness": 4, "direction": "cw"}
+    return {
+        "mode": "Rainbow", "ring": "both", "colors": ["#ff0000"], "speed": 2, "brightness": 4,
+        "direction": "cw", "sensor": "cpu", "temp_range": [35, 85], "span_all": False, "custom": {},
+    }
+
+STRIMER_PORTS = 12
 
 
 DEFAULTS: dict = {
@@ -45,7 +51,13 @@ DEFAULTS: dict = {
         "groups": [_default_group(i) for i in range(4)],
         "lighting": [_default_light() for _ in range(4)],
     },
-    "strimer": {"mb_rgb_sync": False, "lighting": _default_light()},
+    "strimer": {
+        "mb_rgb_sync": False,
+        "per_port": False,
+        "lighting": _default_light(),
+        "ports": [_default_light() for _ in range(STRIMER_PORTS)],
+    },
+    "theme": None,
 }
 
 
@@ -77,6 +89,21 @@ def _validate_light(light: dict, modes, where: str) -> None:
         raise ConfigError(f"{where}: speed must be 0..4")
     if not -1 <= int(light.get("brightness", 4)) <= 4:
         raise ConfigError(f"{where}: brightness must be -1..4")
+    tr = light.get("temp_range", [35, 85])
+    if not (isinstance(tr, list) and len(tr) == 2 and float(tr[0]) < float(tr[1])):
+        raise ConfigError(f"{where}: temp_range must be [low, high] with low < high")
+    custom = light.get("custom") or {}
+    if not isinstance(custom, dict):
+        raise ConfigError(f"{where}: custom must be an object")
+    for ring, limit in (("inner", 48), ("outer", 72), ("leds", 27)):
+        leds = custom.get(ring, [])
+        if not isinstance(leds, list) or len(leds) > limit:
+            raise ConfigError(f"{where}: custom.{ring} must be a list of at most {limit} colours")
+        for c in leds:
+            try:
+                parse_color(c)
+            except (ValueError, TypeError) as e:
+                raise ConfigError(f"{where}: {e}") from None
 
 
 def validate(cfg: dict) -> dict:
@@ -107,12 +134,19 @@ def validate(cfg: dict) -> dict:
     lights = cfg["hub"]["lighting"]
     if len(lights) != 4:
         raise ConfigError("hub.lighting must have 4 entries")
-    hub_modes = set(ALV2_INNER_MODES) | set(ALV2_OUTER_MODES)
+    hub_modes = set(ALV2_INNER_MODES) | set(ALV2_OUTER_MODES) | set(SOFTWARE_MODES)
     for i, light in enumerate(lights):
         lights[i] = _merge(_default_light(), light)
         _validate_light(lights[i], hub_modes, f"hub lighting {i}")
+    strimer_modes = set(STRIMER_MODES) | set(SOFTWARE_MODES)
     cfg["strimer"]["lighting"] = _merge(_default_light(), cfg["strimer"]["lighting"])
-    _validate_light(cfg["strimer"]["lighting"], STRIMER_MODES, "strimer lighting")
+    _validate_light(cfg["strimer"]["lighting"], strimer_modes, "strimer lighting")
+    ports = cfg["strimer"]["ports"]
+    if len(ports) != STRIMER_PORTS:
+        raise ConfigError(f"strimer.ports must have {STRIMER_PORTS} entries")
+    for i, light in enumerate(ports):
+        ports[i] = _merge(_default_light(), light)
+        _validate_light(ports[i], strimer_modes, f"strimer port {i + 1}")
     return cfg
 
 

@@ -16,13 +16,16 @@ from . import config as cfgmod
 from .curves import PRESETS, Governor, interpolate
 from .devices import DRIVERS, VENDOR_ID, LightingEffect, StrimerPlus, UniHubALV2
 from .hidraw import HidrawTransport, enumerate_hidraw
+from .rgbfx import SOFTWARE_MODES, render_hub_port, render_strimer_port
 from .sensors import SensorHub
+from .themes import THEMES, apply_theme
 
 log = logging.getLogger("unihub")
 
 WEB_DIR = Path(__file__).with_name("web")
 RECONNECT_EVERY = 5.0
 KEEPALIVE_EVERY = 10.0
+TEMP_LIGHT_STEP = 2.0  # deg C a Temperature-mode colour must move before it's re-sent
 
 
 def open_devices(skip: frozenset[int] = frozenset()) -> dict[int, object]:
@@ -69,6 +72,8 @@ class Controller:
         self._governors = [Governor() for _ in range(4)]
         self._sent: list[int | None] = [None] * 4
         self._sent_at = [0.0] * 4
+        self._hub_temp_key: list[float | None] = [None] * 4
+        self._strimer_temp_key: list[float | None] = [None] * 12
         self.groups_state = [
             {"rpm": 0, "percent": None, "temp": None, "target": None, "failsafe": False} for _ in range(4)
         ]
@@ -116,25 +121,86 @@ class Controller:
             gov.reset()
         self._push_hub_lighting(hub, range(4))
 
+    def _light_temp(self, entry: dict) -> float | None:
+        return self.sensors.read(entry.get("sensor", "cpu")) if entry["mode"] == "Temperature" else None
+
+    @staticmethod
+    def _temp_key(temp: float | None) -> float | None:
+        return None if temp is None else round(temp / TEMP_LIGHT_STEP)
+
     def _push_hub_lighting(self, hub: UniHubALV2, groups) -> None:
         hcfg = self.cfg["hub"]
         hub.set_mb_rgb_sync(bool(hcfg["mb_rgb_sync"]))
         if hcfg["mb_rgb_sync"]:
             return
         for i in groups:
-            hub.set_lighting(i, LightingEffect.from_dict(hcfg["lighting"][i]))
+            self._push_hub_group(hub, i)
+
+    def _push_hub_group(self, hub: UniHubALV2, i: int) -> None:
+        entry = self.cfg["hub"]["lighting"][i]
+        if entry["mode"] in SOFTWARE_MODES:
+            temp = self._light_temp(entry)
+            fans = [int(g["fans"]) for g in self.cfg["hub"]["groups"]]
+            inner, outer = render_hub_port(entry, i, fans, temp)
+            hub.set_leds(i, inner, outer, int(entry.get("brightness", 4)))
+            self._hub_temp_key[i] = self._temp_key(temp)
+        else:
+            hub.set_lighting(i, LightingEffect.from_dict(entry))
 
     def _init_strimer(self, s: StrimerPlus) -> None:
         self.strimer_firmware = s.read_firmware()
         s.read_channel2_ports()
         self._push_strimer_lighting(s)
 
-    def _push_strimer_lighting(self, s: StrimerPlus) -> None:
+    def _strimer_entries(self, s: StrimerPlus) -> list[dict]:
+        scfg = self.cfg["strimer"]
+        if scfg["per_port"]:
+            return scfg["ports"][: s.port_count]
+        return [scfg["lighting"]] * s.port_count
+
+    def _push_strimer_lighting(self, s: StrimerPlus, ports=None) -> None:
         scfg = self.cfg["strimer"]
         if scfg["mb_rgb_sync"]:
             s.set_mb_rgb_sync(True)
-        else:
-            s.set_lighting(LightingEffect.from_dict(scfg["lighting"]))
+            return
+        entries = self._strimer_entries(s)
+        if ports is None:
+            s.set_mb_rgb_sync(False)
+            ports = range(len(entries))
+            if not scfg["per_port"] and scfg["lighting"]["mode"] not in SOFTWARE_MODES:
+                s.set_lighting(LightingEffect.from_dict(scfg["lighting"]))
+                return
+        for p in ports:
+            entry = entries[p]
+            if entry["mode"] in SOFTWARE_MODES:
+                temp = self._light_temp(entry)
+                s.set_leds({p: render_strimer_port(entry, p, len(entries), temp)}, int(entry.get("brightness", 4)))
+                self._strimer_temp_key[p] = self._temp_key(temp)
+            else:
+                s.set_lighting(LightingEffect.from_dict(entry), ports=[p])
+
+    def _refresh_temperature_lighting(self) -> None:
+        """Re-render Temperature-mode zones whose colour bucket moved."""
+        hub = self.hub
+        if hub is not None and not self.cfg["hub"]["mb_rgb_sync"]:
+            for i, entry in enumerate(self.cfg["hub"]["lighting"]):
+                if entry["mode"] == "Temperature" and self._temp_key(self._light_temp(entry)) != self._hub_temp_key[i]:
+                    try:
+                        self._push_hub_group(hub, i)
+                    except OSError as e:
+                        self._drop("hub", e)
+                        break
+        s = self.strimer
+        if s is not None and not self.cfg["strimer"]["mb_rgb_sync"]:
+            stale = [
+                p for p, entry in enumerate(self._strimer_entries(s))
+                if entry["mode"] == "Temperature" and self._temp_key(self._light_temp(entry)) != self._strimer_temp_key[p]
+            ]
+            if stale:
+                try:
+                    self._push_strimer_lighting(s, stale)
+                except OSError as e:
+                    self._drop("strimer", e)
 
     def _drop(self, which: str, err: Exception) -> None:
         log.warning("%s I/O error, will reconnect: %s", which, err)
@@ -201,6 +267,7 @@ class Controller:
                         self.groups_state[i]["rpm"] = rpm
                 except OSError as e:
                     self._drop("hub", e)
+            self._refresh_temperature_lighting()
 
     # --- config -------------------------------------------------------------
     def apply_config(self, new: dict) -> dict:
@@ -226,6 +293,12 @@ class Controller:
                             self._sent[i] = None
                         if old["hub"]["lighting"][i] != new["hub"]["lighting"][i]:
                             relight.append(i)
+                    if relight and any(i in relight for i in range(4) if old["hub"]["groups"][i]["fans"] != new["hub"]["groups"][i]["fans"]):
+                        # A cross-port gradient depends on every port's fan count.
+                        relight += [
+                            i for i, e in enumerate(new["hub"]["lighting"])
+                            if e["mode"] == "Gradient" and e.get("span_all")
+                        ]
                     if old["hub"]["mb_rgb_sync"] != new["hub"]["mb_rgb_sync"]:
                         relight = list(range(4))
                     if relight:
@@ -289,12 +362,20 @@ class Controller:
             stop.wait(float(self.cfg["poll_interval"]))
 
 
+_SOFTWARE_META = [
+    {"name": "Custom", "software": True, "inner": True, "outer": True, "max_colors": 0},
+    {"name": "Gradient", "software": True, "inner": True, "outer": True, "max_colors": 6},
+    {"name": "Temperature", "software": True, "inner": True, "outer": True, "max_colors": 0},
+]
+
+
 def meta(ctrl: Controller) -> dict:
     return {
         "fan_modes": list(cfgmod.FAN_MODES),
         "presets": PRESETS,
-        "hub_lighting_modes": UniHubALV2.lighting_modes(),
-        "strimer_lighting_modes": StrimerPlus.lighting_modes(),
+        "hub_lighting_modes": UniHubALV2.lighting_modes() + _SOFTWARE_META,
+        "strimer_lighting_modes": StrimerPlus.lighting_modes() + _SOFTWARE_META,
+        "themes": [{"name": n, "swatch": t["swatch"]} for n, t in THEMES.items()],
         "sensors": ctrl.sensors.list(),
     }
 
@@ -349,13 +430,18 @@ def make_handler(ctrl: Controller, allowed_hosts: set[str]):
             # so other websites can't drive the fans through the browser.
             if self.headers.get("X-UniHub") != "1":
                 return self._json(HTTPStatus.FORBIDDEN, {"error": "missing X-UniHub header"})
-            if self.path != "/api/config":
+            if self.path not in ("/api/config", "/api/theme"):
                 return self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             try:
                 n = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(min(n, 1 << 20)))
                 if not isinstance(body, dict):
-                    raise cfgmod.ConfigError("config must be an object")
+                    raise cfgmod.ConfigError("body must be an object")
+                if self.path == "/api/theme":
+                    name = body.get("name")
+                    if name not in THEMES:
+                        raise cfgmod.ConfigError(f"unknown theme {name!r}")
+                    body = apply_theme(ctrl.cfg, name)
                 new = ctrl.apply_config(body)
             except (ValueError, cfgmod.ConfigError) as e:
                 return self._json(HTTPStatus.BAD_REQUEST, {"error": str(e)})

@@ -247,6 +247,26 @@ class UniHubALV2(_Device):
             self._feature(0x10, 0x60, group + 1, self.fan_counts[group], 0x00)
             self._feature(0x60, 0x00, 0x01)
 
+    def set_leds(
+        self, group: int, inner: Sequence[Color] | None, outer: Sequence[Color] | None, brightness: int = 4
+    ) -> None:
+        """Paint every LED of a port explicitly (static mode + per-LED buffer).
+
+        ``inner`` is 6 fans x 8 LEDs, ``outer`` 6 fans x 12 LEDs, fan-major.
+        A ring passed as None is left untouched."""
+        self._check_group(group)
+        bright = _brightness_byte(brightness, off_value=8)
+        with self.lock:
+            for port, leds, n in ((group * 2, inner, self.INNER_LEDS), (group * 2 + 1, outer, self.OUTER_LEDS)):
+                if leds is None:
+                    continue
+                if len(leds) != self.MAX_FANS * n:
+                    raise ValueError(f"expected {self.MAX_FANS * n} colours, got {len(leds)}")
+                self._output(bytes([0x30 | port]) + _encode_colors(leds))
+                self._feature(0x10 | port, ALV2_INNER_MODES["Static"], 0, 0, bright)
+            self._feature(0x10, 0x60, group + 1, self.fan_counts[group], 0x00)
+            self._feature(0x60, 0x00, 0x01)
+
     @staticmethod
     def lighting_modes() -> list[dict]:
         names = list(dict.fromkeys([*ALV2_INNER_MODES, *ALV2_OUTER_MODES]))
@@ -349,6 +369,21 @@ class StrimerPlus(_Device):
                 self._feature(0x10 | (port & 0x0F), mode, speed, direction, bright)
                 if colors:
                     self._output(bytes([0x30 | (port & 0x0F)]) + _encode_colors(colors))
+            bitmap = self._enable_bitmap()
+            self._feature(0x2C, bitmap >> 8, bitmap & 0xFF)
+
+    def set_leds(self, frames: dict[int, Sequence[Color]], brightness: int = 4) -> None:
+        """Paint ports LED-by-LED: ``frames`` maps port -> 27 colours."""
+        bright = _brightness_byte(brightness, off_value=0xFF)
+        with self.lock:
+            for port, leds in frames.items():
+                if not 0 <= port < self.port_count:
+                    raise ValueError(f"port {port} out of range")
+                if len(leds) != self.LEDS_PER_PORT:
+                    raise ValueError(f"expected {self.LEDS_PER_PORT} colours, got {len(leds)}")
+                self.port_modes[port] = STRIMER_MODES["Static"]
+                self._feature(0x10 | port, STRIMER_MODES["Static"], 0, 0, bright)
+                self._output(bytes([0x30 | port]) + _encode_colors(leds))
             bitmap = self._enable_bitmap()
             self._feature(0x2C, bitmap >> 8, bitmap & 0xFF)
 

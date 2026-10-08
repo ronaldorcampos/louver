@@ -9,7 +9,7 @@ const $ = (id) => document.getElementById(id);
 
 let cfg = null, meta = null, state = null;
 let selPort = 0, lightPort = 0;  // lightPort 4 = all ports
-let saveTimer = null, dragging = false;
+let saveTimer = null, dragging = false, editSeq = 0;
 
 async function api(path, body) {
   const opts = body === undefined ? {} : {
@@ -31,11 +31,19 @@ function toast(msg) {
 }
 
 // Coalesce rapid edits (sliders, dragging) into one PUT.
+// Only adopt the server's (validated) copy if nothing was edited meanwhile,
+// so a slow response can't roll back a newer local change.
 function save(delay = 250) {
+  const seq = ++editSeq;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
-    try { cfg = await api("/api/config", cfg); }
-    catch (e) { toast("Not saved: " + e.message); cfg = await api("/api/config"); renderAll(); }
+    try {
+      const saved = await api("/api/config", cfg);
+      if (seq === editSeq) cfg = saved;
+    } catch (e) {
+      toast("Not saved: " + e.message);
+      if (seq === editSeq) { cfg = await api("/api/config"); renderAll(); }
+    }
   }, delay);
 }
 
@@ -96,8 +104,9 @@ function renderFans() {
   chips.replaceChildren(...meta.fan_modes.map((m) => el("button", {
     class: "chip" + (m === g.mode ? " on" : ""),
     onclick: () => {
-      if (m === "curve" && g.mode in meta.presets) g.curve = meta.presets[g.mode].map((p) => [...p]);
-      g.mode = m; save(0); renderFans();
+      const cur = cfg.hub.groups[selPort];
+      if (m === "curve" && cur.mode in meta.presets) cur.curve = meta.presets[cur.mode].map((p) => [...p]);
+      cur.mode = m; save(0); renderFans();
     },
   }, MODE_LABELS[m])));
 
@@ -175,7 +184,8 @@ function drawCurve() {
       c.addEventListener("pointerdown", (e) => startDrag(e, i));
       c.addEventListener("contextmenu", (e) => {
         e.preventDefault();
-        if (g.curve.length > 2) { g.curve.splice(i, 1); save(0); drawCurve(); }
+        const cur = cfg.hub.groups[selPort].curve;
+        if (cur.length > 2) { cur.splice(i, 1); save(0); drawCurve(); }
       });
     }
     svg.append(c);
@@ -213,73 +223,238 @@ $("curve").addEventListener("dblclick", (e) => {
   save(0); drawCurve();
 });
 
-// ---------------- lighting (shared) ----------------
-function lightingUI({ effectsBox, colorsBox, speed, bright, dir, getLight, setLight, modes, filterMode }) {
-  const L = getLight();
-  const spec = modes.find((m) => m.name === L.mode) || modes[0];
-  effectsBox.replaceChildren(...modes.filter(filterMode).map((m) => el("button", {
-    class: "effect" + (m.name === L.mode ? " on" : ""),
-    onclick: () => setLight({ mode: m.name }),
-  }, m.name, ...(m.inner === false ? [el("small", {}, "outer ring only")] : m.outer === false ? [el("small", {}, "inner ring only")] : []))));
+// ---------------- lighting ----------------
+const HUB_INNER = 8, HUB_OUTER = 12, HUB_FANS = 6, STRIMER_LEDS = 27;
+const BRIGHT_LABELS = { "-1": "Off", 0: "Lowest", 1: "Low", 2: "Normal", 3: "High", 4: "Highest" };
+const SPEED_LABELS = ["Slowest", "Slow", "Normal", "Fast", "Fastest"];
+let brush = "#ff00c8", paintTool = "led", painting = false, strimerPort = 0;
 
-  const n = spec.max_colors;
-  colorsBox.replaceChildren();
-  if (!n) colorsBox.append(el("span", { class: "none" }, "This effect uses built-in colours"));
-  for (let i = 0; i < n; i++) {
-    const v = L.colors[i] || L.colors[L.colors.length - 1] || "#ffffff";
-    const inp = el("input", { type: "color", value: v });
+function renderThemes(box) {
+  box.replaceChildren(...meta.themes.map((t) => {
+    const sw = el("div", { class: "swatch" });
+    sw.style.background = `linear-gradient(90deg, ${t.swatch.join(", ")})`;
+    return el("button", {
+      class: "theme" + (cfg.theme === t.name ? " on" : ""),
+      onclick: async () => {
+        try { cfg = await api("/api/theme", { name: t.name }); renderAll(); }
+        catch (e) { toast("Theme failed: " + e.message); }
+      },
+    }, sw, el("span", {}, t.name));
+  }));
+}
+
+function slider(min, max, value, labels, onchange) {
+  const out = el("b", {}, labels[value] ?? String(value));
+  const inp = el("input", { type: "range", min, max, value });
+  inp.addEventListener("input", () => { out.textContent = labels[inp.value] ?? inp.value; });
+  inp.addEventListener("change", () => onchange(+inp.value));
+  return el("div", { class: "slider-wrap" }, inp, out);
+}
+
+function field(label, ...kids) { return el("div", { class: "field" }, el("span", {}, label), el("div", {}, ...kids)); }
+
+function seg(options, current, onpick) {
+  return el("div", { class: "seg" }, ...options.map(([v, label]) =>
+    el("button", { class: v === current ? "on" : "", onclick: () => onpick(v) }, label)));
+}
+
+function colorInputs(colors, count, labelFn, onchange, { addRemove = false } = {}) {
+  const box = el("div", { class: "colors" });
+  for (let i = 0; i < count; i++) {
+    const v = colors[i] || colors[colors.length - 1] || "#ffffff";
+    const inp = el("input", { type: "color", value: v, title: labelFn(i) });
     inp.addEventListener("change", () => {
-      const colors = [...L.colors];
-      while (colors.length < i) colors.push(colors[colors.length - 1] || "#ffffff");
-      colors[i] = inp.value;
-      setLight({ colors });
+      const next = [...colors];
+      while (next.length < i) next.push(next[next.length - 1] || "#ffffff");
+      next[i] = inp.value;
+      onchange(next.slice(0, Math.max(count, next.length)));
     });
-    colorsBox.append(inp);
+    box.append(el("label", { class: "cpick" }, inp, el("small", {}, labelFn(i))));
   }
-  speed.value = L.speed;
-  speed.onchange = () => setLight({ speed: +speed.value });
-  bright.value = L.brightness;
-  bright.onchange = () => setLight({ brightness: +bright.value });
-  dir.replaceChildren(...[["cw", "Clockwise"], ["ccw", "Counter-clockwise"]].map(([v, label]) =>
-    el("button", { class: L.direction === v ? "on" : "", onclick: () => setLight({ direction: v }) }, label)));
+  if (addRemove) {
+    if (count < 6) box.append(el("button", { class: "btn small", onclick: () => onchange([...colors.slice(0, count), colors[count - 1] || "#ffffff"]) }, "+"));
+    if (count > 2) box.append(el("button", { class: "btn small", onclick: () => onchange(colors.slice(0, count - 1)) }, "−"));
+  }
+  return box;
+}
+
+// kind: "hub" | "strimer". ctx: { entry, set(patch), fans (hub only) }
+function lightingEditor(kind, ctx) {
+  const L = ctx.entry;
+  const modes = kind === "hub" ? meta.hub_lighting_modes : meta.strimer_lighting_modes;
+  const spec = modes.find((m) => m.name === L.mode) || modes[0];
+  const hw = modes.filter((m) => !m.software && (kind !== "hub" || L.ring === "both" || L.ring === undefined || m[L.ring]));
+  const sw = modes.filter((m) => m.software);
+  const effectBtn = (m) => el("button", { class: "effect" + (m.name === L.mode ? " on" : ""), onclick: () => ctx.set({ mode: m.name }) },
+    m.name, ...(m.inner === false ? [el("small", {}, "outer ring only")] : m.outer === false ? [el("small", {}, "inner ring only")] : []));
+
+  const panel = el("div", { class: "panel light-panel" });
+  if (kind === "hub" && L.mode !== "Custom") {
+    panel.append(field("Ring", seg([["both", "Both rings"], ["inner", "Inner"], ["outer", "Outer"]], L.ring, (v) => ctx.set({ ring: v }))));
+  }
+  // colours
+  if (L.mode === "Gradient") {
+    const n = Math.max(2, Math.min(6, L.colors.length));
+    panel.append(field("Colour stops", colorInputs(L.colors, n, (i) => `Stop ${i + 1}`, (c) => ctx.set({ colors: c }), { addRemove: true })));
+    panel.append(field("Spread", seg([[true, kind === "hub" ? "Across all ports" : "Across ports"], [false, kind === "hub" ? "Within this port" : "Along each port"]],
+      !!L.span_all, (v) => ctx.set({ span_all: v }))));
+  } else if (L.mode === "Temperature") {
+    const sens = el("select", {}, ...meta.sensors.map((s) => el("option", { value: s.id }, s.label)));
+    sens.value = L.sensor;
+    sens.addEventListener("change", () => ctx.set({ sensor: sens.value }));
+    const lo = el("input", { type: "number", value: L.temp_range[0], min: 0, max: 110 });
+    const hi = el("input", { type: "number", value: L.temp_range[1], min: 1, max: 120 });
+    const upd = () => { if (+lo.value < +hi.value) ctx.set({ temp_range: [+lo.value, +hi.value] }); else toast("Cool temperature must be below hot"); };
+    lo.addEventListener("change", upd); hi.addEventListener("change", upd);
+    panel.append(field("Sensor", sens));
+    panel.append(field("Range (°C)", el("div", { class: "row gap" }, el("span", { class: "thermo cold" }, "blue at"), lo, el("span", { class: "thermo hot" }, "red at"), hi)));
+  } else if (L.mode === "Custom") {
+    panel.append(field("Paint", painter(kind, ctx)));
+  } else if (spec.max_colors) {
+    const perFan = kind === "hub" && (L.mode === "Static" || L.mode === "Breathing");
+    const n = perFan ? Math.max(1, ctx.fans) : spec.max_colors;
+    const lab = perFan ? (i) => `Fan ${i + 1}` : spec.name.includes("Colorful") ? (i) => ["Top", "Right", "Bottom", "Left"][i] : (i) => `#${i + 1}`;
+    panel.append(field(perFan ? "Fan colours" : "Colours", colorInputs(L.colors, n, lab, (c) => ctx.set({ colors: c }))));
+  } else {
+    panel.append(field("Colours", el("span", { class: "none" }, L.mode === "Off" ? "LEDs off" : "This effect uses built-in colours")));
+  }
+  if (!spec.software && L.mode !== "Off") {
+    panel.append(field("Speed", slider(0, 4, L.speed, SPEED_LABELS, (v) => ctx.set({ speed: v }))));
+    panel.append(field("Direction", seg([["cw", "Clockwise"], ["ccw", "Counter-clockwise"]], L.direction, (v) => ctx.set({ direction: v }))));
+  }
+  if (L.mode !== "Off") panel.append(field("Brightness", slider(-1, 4, L.brightness, BRIGHT_LABELS, (v) => ctx.set({ brightness: v }))));
+
+  return el("div", {},
+    el("h3", {}, "Hardware effects"), el("div", { class: "effects" }, ...hw.map(effectBtn)),
+    el("h3", {}, "Software effects ", el("small", {}, "rendered per-LED by UniHub")), el("div", { class: "effects" }, ...sw.map(effectBtn)),
+    panel);
+}
+
+// ---- per-LED painter ----
+function painter(kind, ctx) {
+  const L = ctx.entry;
+  const custom = JSON.parse(JSON.stringify(L.custom || {}));
+  const rings = kind === "hub" ? [["outer", HUB_OUTER], ["inner", HUB_INNER]] : [["leds", STRIMER_LEDS]];
+  for (const [ring, n] of rings) {
+    const total = (kind === "hub" ? HUB_FANS : 1) * n;
+    custom[ring] = Array.from({ length: total }, (_, i) => (custom[ring] || [])[i] || "#000000");
+  }
+  const commit = () => ctx.set({ custom: JSON.parse(JSON.stringify(custom)) }, { rerender: false, delay: 300 });
+
+  const paintLed = (ring, idx, dot) => {
+    const n = rings.find((r) => r[0] === ring)[1];
+    const fan = Math.floor(idx / n);
+    const targets = paintTool === "led" ? [idx]
+      : paintTool === "ring" ? Array.from({ length: n }, (_, k) => fan * n + k)
+      : null;
+    if (targets) for (const t of targets) custom[ring][t] = brush;
+    else for (const [r, rn] of rings) for (let k = 0; k < rn; k++) custom[r][fan * rn + k] = brush;  // whole fan
+    root.querySelectorAll("[data-ring]").forEach((d) => { d.setAttribute("fill", custom[d.dataset.ring][+d.dataset.idx]); });
+    commit();
+  };
+
+  const root = el("div", { class: "painter" });
+  const brushInp = el("input", { type: "color", value: brush });
+  brushInp.addEventListener("input", () => { brush = brushInp.value; });
+  const tools = kind === "hub" ? [["led", "LED"], ["ring", "Ring"], ["fan", "Whole fan"]] : [["led", "LED"], ["ring", "Whole port"]];
+  const toolSeg = () => seg(tools, paintTool, (v) => { paintTool = v; toolBox.replaceChildren(toolSeg()); });
+  const toolBox = el("div", {}, toolSeg());
+  const fillAll = el("button", { class: "btn small", onclick: () => {
+    for (const [r] of rings) custom[r] = custom[r].map(() => brush);
+    root.querySelectorAll("[data-ring]").forEach((d) => d.setAttribute("fill", brush));
+    commit();
+  } }, "Fill all");
+  root.append(el("div", { class: "row gap" }, el("label", {}, "Brush", brushInp), toolBox, fillAll));
+
+  const area = el("div", { class: "fans-grid" });
+  const dot = (ring, idx, cx, cy, r) => {
+    const c = sv("circle", { cx, cy, r, fill: custom[ring][idx], class: "led", "data-ring": ring, "data-idx": idx });
+    c.addEventListener("pointerdown", (e) => { e.preventDefault(); painting = true; paintLed(ring, idx, c); });
+    c.addEventListener("pointerenter", () => { if (painting && paintTool === "led") paintLed(ring, idx, c); });
+    return c;
+  };
+  if (kind === "hub") {
+    const fans = Math.max(1, ctx.fans);
+    for (let f = 0; f < fans; f++) {
+      const s = sv("svg", { viewBox: "0 0 120 120", class: "fan" });
+      s.append(sv("rect", { x: 4, y: 4, width: 112, height: 112, rx: 14, class: "fan-body" }));
+      s.append(sv("circle", { cx: 60, cy: 60, r: 16, class: "fan-hub" }));
+      // Outer: 12 LEDs around the frame, 3 per side (corners on AL fans). Inner: 8 around the hub.
+      for (let k = 0; k < HUB_OUTER; k++) {
+        const a = -Math.PI / 2 + (k + 0.5) * 2 * Math.PI / HUB_OUTER;
+        s.append(dot("outer", f * HUB_OUTER + k, 60 + 46 * Math.cos(a), 60 + 46 * Math.sin(a), 6));
+      }
+      for (let k = 0; k < HUB_INNER; k++) {
+        const a = -Math.PI / 2 + (k + 0.5) * 2 * Math.PI / HUB_INNER;
+        s.append(dot("inner", f * HUB_INNER + k, 60 + 27 * Math.cos(a), 60 + 27 * Math.sin(a), 5));
+      }
+      area.append(el("div", { class: "fan-wrap" }, s, el("small", {}, `Fan ${f + 1}`)));
+    }
+  } else {
+    const s = sv("svg", { viewBox: `0 0 ${STRIMER_LEDS * 22 + 8} 30`, class: "strip" });
+    for (let k = 0; k < STRIMER_LEDS; k++) s.append(dot("leds", k, 15 + k * 22, 15, 8));
+    area.append(s);
+  }
+  root.append(area, el("p", { class: "hint" }, "Click or drag to paint. Outer ring = the 12 frame LEDs, inner ring = the 8 LEDs around the hub. LED 1 is drawn at the top; the physical start position may differ on your fans."));
+  return root;
+}
+window.addEventListener("pointerup", () => { painting = false; });
+
+function editLight({ rerender = true, delay = 0 } = {}) {
+  cfg.theme = null;
+  save(delay);
+  if (rerender) { renderHubLighting(); renderStrimer(); }
 }
 
 function renderHubLighting() {
-  const lights = cfg.hub.lighting;
+  renderThemes($("hub-themes"));
   $("light-ports").replaceChildren(...[...cfg.hub.groups.map((g) => g.name), "All ports"].map((name, i) =>
     el("button", { class: i === lightPort ? "on" : "", onclick: () => { lightPort = i; renderHubLighting(); } }, name)));
   $("hub-mbsync").checked = cfg.hub.mb_rgb_sync;
-  $("hub-light-controls").classList.toggle("hidden", cfg.hub.mb_rgb_sync);
+  const box = $("hub-light-controls");
+  box.classList.toggle("hidden", cfg.hub.mb_rgb_sync);
   const idx = lightPort === 4 ? 0 : lightPort;
-  const L = lights[idx];
-  $("ring-seg").replaceChildren(...[["both", "Both rings"], ["inner", "Inner"], ["outer", "Outer"]].map(([v, label]) =>
-    el("button", { class: L.ring === v ? "on" : "", onclick: () => setHubLight({ ring: v }) }, label)));
-  lightingUI({
-    effectsBox: $("hub-effects"), colorsBox: $("hub-colors"), speed: $("hub-speed"), bright: $("hub-bright"), dir: $("hub-dir"),
-    getLight: () => L, setLight: setHubLight, modes: meta.hub_lighting_modes,
-    filterMode: (m) => L.ring === "both" || m[L.ring],
-  });
+  box.replaceChildren(lightingEditor("hub", {
+    entry: cfg.hub.lighting[idx],
+    fans: lightPort === 4 ? Math.max(...cfg.hub.groups.map((g) => g.fans)) : cfg.hub.groups[idx].fans,
+    // Look the entry up at edit time: cfg may have been replaced by a save.
+    set: (patch, opts) => {
+      const targets = lightPort === 4 ? [0, 1, 2, 3] : [idx];
+      const merged = { ...cfg.hub.lighting[idx], ...patch };
+      for (const i of targets) cfg.hub.lighting[i] = JSON.parse(JSON.stringify(merged));
+      editLight(opts);
+    },
+  }));
 }
-
-function setHubLight(patch) {
-  const targets = lightPort === 4 ? [0, 1, 2, 3] : [lightPort];
-  const base = cfg.hub.lighting[lightPort === 4 ? 0 : lightPort];
-  for (const i of targets) cfg.hub.lighting[i] = { ...base, ...patch };
-  save(0); renderHubLighting();
-}
-$("hub-mbsync").addEventListener("change", (e) => { cfg.hub.mb_rgb_sync = e.target.checked; save(0); renderHubLighting(); });
+$("hub-mbsync").addEventListener("change", (e) => { cfg.hub.mb_rgb_sync = e.target.checked; cfg.theme = null; save(0); renderHubLighting(); });
 
 function renderStrimer() {
-  const L = cfg.strimer.lighting;
-  $("strimer-mbsync").checked = cfg.strimer.mb_rgb_sync;
-  $("strimer-light-controls").classList.toggle("hidden", cfg.strimer.mb_rgb_sync);
-  lightingUI({
-    effectsBox: $("strimer-effects"), colorsBox: $("strimer-colors"), speed: $("strimer-speed"), bright: $("strimer-bright"), dir: $("strimer-dir"),
-    getLight: () => L, setLight: (patch) => { cfg.strimer.lighting = { ...L, ...patch }; save(0); renderStrimer(); },
-    modes: meta.strimer_lighting_modes, filterMode: () => true,
-  });
+  renderThemes($("strimer-themes"));
+  const s = cfg.strimer, ports = state?.strimer.ports || 12;
+  $("strimer-mbsync").checked = s.mb_rgb_sync;
+  $("strimer-perport").checked = s.per_port;
+  $("strimer-ports").classList.toggle("hidden", !s.per_port);
+  $("strimer-ports").replaceChildren(...Array.from({ length: ports }, (_, i) =>
+    el("button", { class: i === strimerPort ? "on" : "", onclick: () => { strimerPort = i; renderStrimer(); } }, String(i + 1))));
+  const box = $("strimer-light-controls");
+  box.classList.toggle("hidden", s.mb_rgb_sync);
+  box.replaceChildren(lightingEditor("strimer", {
+    entry: s.per_port ? s.ports[strimerPort] : s.lighting,
+    set: (patch, opts) => {
+      const st = cfg.strimer;
+      if (st.per_port) st.ports[strimerPort] = { ...st.ports[strimerPort], ...patch };
+      else st.lighting = { ...st.lighting, ...patch };
+      editLight(opts);
+    },
+  }));
 }
-$("strimer-mbsync").addEventListener("change", (e) => { cfg.strimer.mb_rgb_sync = e.target.checked; save(0); renderStrimer(); });
+$("strimer-mbsync").addEventListener("change", (e) => { cfg.strimer.mb_rgb_sync = e.target.checked; cfg.theme = null; save(0); renderStrimer(); });
+$("strimer-perport").addEventListener("change", (e) => {
+  const s = cfg.strimer;
+  s.per_port = e.target.checked;
+  if (s.per_port) s.ports = s.ports.map(() => JSON.parse(JSON.stringify(s.lighting)));  // start from the current look
+  cfg.theme = null; save(0); renderStrimer();
+});
 
 // ---------------- settings ----------------
 function renderSettings() {
