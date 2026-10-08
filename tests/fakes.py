@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 
+def Z(data) -> bytes:
+    """A feature report with its zero padding removed (tests use this on
+    both sides, so a meaningful trailing 0 is dropped consistently)."""
+    return bytes(data).rstrip(b"\0")
+
+
 class FakeTransport:
     """Records every report; answers input reads from a scripted map keyed by
     the last feature report's command bytes."""
@@ -17,8 +23,9 @@ class FakeTransport:
     def send_feature(self, data: bytes) -> None:
         if self.fail:
             raise OSError(5, "EIO")
-        self.features.append(bytes(data))
-        self.log.append(("F", bytes(data)))
+        # Devices pad reports to descriptor size; compare without the padding.
+        self.features.append(Z(data))
+        self.log.append(("F", Z(data)))
         self._last = bytes(data[1:3])
 
     def write(self, data: bytes) -> None:

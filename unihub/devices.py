@@ -79,8 +79,10 @@ class Firmware:
 
 
 # --- UNI HUB AL V2 lighting tables -----------------------------------------
-# Inner ring (8 LEDs/fan) and outer ring (12 LEDs/fan) take different mode
-# bytes on the AL V2. A mode missing from one ring is skipped on that ring.
+# Inner ring (8 LEDs/fan) and outer ring (12 LEDs/fan) take separate effect
+# numbers. Verified numbers come from USB captures of L-Connect 3 driving a
+# firmware v0.4 hub (the latest L-Connect offers); the rest are inherited
+# from lian-li-linux and can be corrected per hub in the Lighting Lab.
 
 ALV2_INNER_MODES: dict[str, int] = {
     "Off": 0, "Static": 1, "Breathing": 2, "Rainbow Morph": 4, "Rainbow": 5,
@@ -91,15 +93,21 @@ ALV2_INNER_MODES: dict[str, int] = {
     "Twinkle": 42,
 }  # fmt: skip
 
+# lian-li-linux's outer table was wrong for 3 of the 4 outer effects captured
+# (it put them in the 40s-60s); v0.4 numbers its outer ring like the inner
+# ring with small offsets, so unverified effects that exist on both rings
+# default to the inner number, which matched 3 of 5 captured.
 ALV2_OUTER_MODES: dict[str, int] = {
-    "Off": 0, "Static": 1, "Breathing": 2, "Static Colorful": 1,
-    "Breathing Colorful": 2, "Rainbow Morph": 4, "Breathing Rainbow": 6,
-    "Meteor": 25, "Runway": 26, "Rainbow": 43, "Color Cycle": 46, "Tai Chi": 47,
-    "Warning": 48, "Voice": 49, "Mixing": 50, "Tide": 51, "Scan": 52,
-    "Contest": 53, "Colorful City": 56, "Render": 57, "Twinkle": 58, "Wave": 59,
-    "Spring": 60, "Tail Chasing": 61, "Mop Up": 62, "Tornado": 63,
-    "Staggered": 64, "Spanning Teacups": 65, "Electric Current": 66, "Stack": 67,
+    **{k: v for k, v in ALV2_INNER_MODES.items()},
+    "Static Colorful": 1, "Breathing Colorful": 2,
+    "Color Cycle": 28, "Wave": 31,  # captured; differ from the inner ring
+    # Outer-only effects, unverified (lian-li-linux numbering):
+    "Tai Chi": 47, "Contest": 53, "Tornado": 63, "Staggered": 64,
+    "Spanning Teacups": 65, "Electric Current": 66,
 }  # fmt: skip
+
+VERIFIED_INNER = {"Static", "Breathing", "Rainbow", "Meteor", "Meteor Rainbow", "Pac-Man", "Lottery", "Runway"}
+VERIFIED_OUTER = {"Static", "Breathing", "Runway", "Color Cycle", "Wave", "Mixing"}
 
 PER_FAN_MODES = {"Static", "Breathing"}
 CORNER_MODES = {"Static Colorful", "Breathing Colorful"}
@@ -128,6 +136,10 @@ class LightingEffect:
 
 class _Device:
     cmd_delay = 0.02
+    # Report sizes from the HID descriptor (incl. report ID). L-Connect pads
+    # every lighting report to these sizes, so we do too.
+    feature_size = 7
+    output_size = 353
     # Measured on a real AL V2: replies land 100-165 ms after the query, and
     # until then GET_INPUT returns whatever the previous query left behind.
     reply_timeout = 0.5
@@ -146,19 +158,19 @@ class _Device:
 
     def _feature(self, *payload: int) -> None:
         with self.lock:
-            self.t.send_feature(bytes([REPORT_ID, *payload]))
+            self.t.send_feature(bytes([REPORT_ID, *payload]).ljust(self.feature_size, b"\0"))
             self._sleep(self.cmd_delay)
 
     def _output(self, payload: bytes) -> None:
         with self.lock:
-            self.t.write(bytes([REPORT_ID]) + payload)
+            self.t.write((bytes([REPORT_ID]) + payload).ljust(self.output_size, b"\0"))
             self._sleep(self.cmd_delay)
 
     def _query(self, cmd: tuple[int, ...], is_reply: Callable[[bytes], bool], length: int) -> bytes:
         """Send a query and poll the input report until a reply of the
         expected kind shows up (never trust the first read: it's stale)."""
         with self.lock:
-            self.t.send_feature(bytes([REPORT_ID, *cmd]))
+            self.t.send_feature(bytes([REPORT_ID, *cmd]).ljust(self.feature_size, b"\0"))
             deadline = self._clock() + self.reply_timeout
             while True:
                 data = self.t.get_input(REPORT_ID, 64)
@@ -186,6 +198,14 @@ class UniHubALV2(_Device):
         self.fan_counts = [3] * self.GROUPS
         self.inner_modes = dict(ALV2_INNER_MODES)
         self.outer_modes = dict(ALV2_OUTER_MODES)
+
+    def _commit(self) -> None:
+        """Apply staged lighting. On firmware v0.4 effects only *animate* after
+        the merge-order command (identity order = independent ports); without
+        it every effect freezes on its first frame. Found by capturing
+        L-Connect 3, which sends it after each apply."""
+        self._feature(0x60, 0x00, 0x01)
+        self._feature(0x10, 0x63, 0x00, 0x01, 0x02, 0x03)
 
     def set_mode_overrides(self, inner: dict[str, int], outer: dict[str, int]) -> None:
         """Replace reference mode numbers with ones verified on this hub
@@ -267,8 +287,7 @@ class UniHubALV2(_Device):
                 self._output(bytes([0x30 | port]) + _encode_colors(colors))
                 self._feature(0x10 | port, mode_byte, speed, direction, bright)
             # The hub re-latches LED counts, then commits the frame.
-            self._feature(0x10, 0x60, group + 1, self.fan_counts[group], 0x00)
-            self._feature(0x60, 0x00, 0x01)
+            self._commit()
 
     def set_leds(
         self, group: int, inner: Sequence[Color] | None, outer: Sequence[Color] | None, brightness: int = 4
@@ -287,8 +306,7 @@ class UniHubALV2(_Device):
                     raise ValueError(f"expected {self.MAX_FANS * n} colours, got {len(leds)}")
                 self._output(bytes([0x30 | port]) + _encode_colors(leds))
                 self._feature(0x10 | port, ALV2_INNER_MODES["Static"], 0, 0, bright)
-            self._feature(0x10, 0x60, group + 1, self.fan_counts[group], 0x00)
-            self._feature(0x60, 0x00, 0x01)
+            self._commit()
 
     def raw_effect(
         self, group: int, ring: str, mode: int, colors: Sequence[Color], speed: int = 2,
@@ -307,8 +325,7 @@ class UniHubALV2(_Device):
             self._output(bytes([0x30 | port]) + _encode_colors(buf))
             self._feature(0x10 | port, mode, _speed_byte(speed), _direction_byte(direction),
                           _brightness_byte(brightness, off_value=8))
-            self._feature(0x10, 0x60, group + 1, self.fan_counts[group], 0x00)
-            self._feature(0x60, 0x00, 0x01)
+            self._commit()
 
     @staticmethod
     def lighting_modes() -> list[dict]:
@@ -318,6 +335,7 @@ class UniHubALV2(_Device):
                 "name": n,
                 "inner": n in ALV2_INNER_MODES,
                 "outer": n in ALV2_OUTER_MODES,
+                "verified": {"inner": n in VERIFIED_INNER, "outer": n in VERIFIED_OUTER},
                 "max_colors": 4 if n in CORNER_MODES else (UniHubALV2.MAX_FANS if n in PER_FAN_MODES else (0 if "Rainbow" in n or n == "Off" else UniHubALV2.PALETTE)),
             }
             for n in names
@@ -344,6 +362,7 @@ class StrimerPlus(_Device):
     PID = 0xA200
     NAME = "Strimer Plus"
     cmd_delay = 0.04
+    output_size = 255  # Strimer descriptor: 254-byte output report
     PORTS_PER_CHANNEL = 6
     LEDS_PER_PORT = 27
 

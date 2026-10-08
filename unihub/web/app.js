@@ -547,7 +547,9 @@ function renderLab() {
     const cell = (ring) => {
       if (m[ring] === false) return el("td", { class: "g" }, "—");
       const v = cfg.hub.mode_map[ring][m.name];
-      if (v === undefined) return el("td", { class: "g" }, "unverified");
+      if (v === undefined) return m.verified?.[ring]
+        ? el("td", { class: "v" }, "✓ from L-Connect capture")
+        : el("td", { class: "g" }, "unverified");
       return el("td", { class: "v" }, `#${v} ✓ `, el("button", { class: "btn small", onclick: () => { delete cfg.hub.mode_map[ring][m.name]; save(0); renderLab(); } }, "×"));
     };
     return el("tr", {}, el("td", {}, m.name), cell("inner"), cell("outer"));

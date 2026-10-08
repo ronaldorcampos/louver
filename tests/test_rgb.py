@@ -7,7 +7,7 @@ from unihub.devices import StrimerPlus, UniHubALV2
 from unihub.rgbfx import gradient, render_hub_port, render_strimer_port, thermal
 from unihub.themes import THEMES, apply_theme
 
-from .fakes import HUB_RESPONSES, STRIMER_RESPONSES, FakeTransport
+from .fakes import Z, HUB_RESPONSES, STRIMER_RESPONSES, FakeTransport
 from .test_control import Rig, _req, server  # noqa: F401  (fixture)
 
 
@@ -43,12 +43,12 @@ def test_hub_set_leds_packets():
     t = FakeTransport(HUB_RESPONSES)
     h = UniHubALV2(t, sleep=lambda s: None)
     h.set_leds(3, [(1, 2, 3)] * 48, [(4, 5, 6)] * 72, brightness=2)
-    assert [o[:5] for o in t.outputs] == [bytes([0xE0, 0x36, 1, 3, 2]), bytes([0xE0, 0x37, 4, 6, 5])]
+    assert [o[:5] for o in t.outputs] == [Z([0xE0, 0x36, 1, 3, 2]), Z([0xE0, 0x37, 4, 6, 5])]
     assert t.features == [
-        bytes([0xE0, 0x16, 1, 0, 0, 2]),
-        bytes([0xE0, 0x17, 1, 0, 0, 2]),
-        bytes([0xE0, 0x10, 0x60, 4, 3, 0]),
-        bytes([0xE0, 0x60, 0, 1]),
+        Z([0xE0, 0x16, 1, 0, 0, 2]),
+        Z([0xE0, 0x17, 1, 0, 0, 2]),
+        Z([0xE0, 0x60, 0, 1]),
+        Z([0xE0, 0x10, 0x63, 0, 1, 2, 3]),
     ]
     with pytest.raises(ValueError):
         h.set_leds(0, [(0, 0, 0)] * 47, None)
@@ -60,8 +60,8 @@ def test_strimer_set_leds_packets():
     s.read_channel2_ports()
     t.features.clear()
     s.set_leds({7: [(9, 8, 7)] * 27}, brightness=-1)
-    assert t.features[0] == bytes([0xE0, 0x17, 1, 0, 0, 0xFF])
-    assert t.outputs[0][:5] == bytes([0xE0, 0x37, 9, 7, 8])
+    assert t.features[0] == Z([0xE0, 0x17, 1, 0, 0, 0xFF])
+    assert t.outputs[0][:5] == Z([0xE0, 0x37, 9, 7, 8])
 
 
 def test_every_theme_validates_and_controller_applies_it():
@@ -107,7 +107,7 @@ def test_strimer_per_port_mixes_hardware_and_software():
     r.ctrl.apply_config(cfg)
     by_port = {o[1] & 0x0F: o for o in r.str_t.outputs}
     assert by_port[0][2:5] == bytes([0, 0, 255])  # green -> R,B,G = 0,0,255
-    assert by_port[1][2:5] == bytes([255, 0, 0]) and by_port[1][-3:] == bytes([0, 255, 0])  # red .. blue along the strip
+    assert by_port[1][2:5] == bytes([255, 0, 0]) and by_port[1][2 + 26 * 3 : 2 + 27 * 3] == bytes([0, 255, 0])  # red .. blue along the strip
     assert len(by_port) == 10
 
 
@@ -129,8 +129,8 @@ def test_mode_map_overrides_reference_numbers():
     cfg["hub"]["mode_map"] = {"inner": {"Rainbow": 40}, "outer": {"Rainbow": 5}}
     r.hub_t.features.clear()
     r.ctrl.apply_config(cfg)
-    assert bytes([0xE0, 0x10, 40, 0, 0, 0]) in r.hub_t.features
-    assert bytes([0xE0, 0x11, 5, 0, 0, 0]) in r.hub_t.features
+    assert Z([0xE0, 0x10, 40, 0, 0, 0]) in r.hub_t.features
+    assert Z([0xE0, 0x11, 5, 0, 0, 0]) in r.hub_t.features
     bad = json.loads(json.dumps(cfg))
     bad["hub"]["mode_map"]["inner"]["Nonsense"] = 3
     with pytest.raises(cfgmod.ConfigError):
@@ -143,7 +143,7 @@ def test_lab_shows_raw_effect_and_is_not_overwritten_until_done():
     r.ctrl.tick()
     r.hub_t.features.clear(); r.hub_t.outputs.clear()
     r.ctrl.lab_show({"group": 2, "ring": "outer", "mode": 77, "speed": 4})
-    assert bytes([0xE0, 0x15, 77, 0xFE, 0, 0]) in r.hub_t.features
+    assert Z([0xE0, 0x15, 77, 0xFE, 0, 0]) in r.hub_t.features
     assert r.ctrl.state()["hub"]["lab"] == [2]
     r.hub_t.outputs.clear()
     r.sensors.values["cpu"] = 80.0  # Temperature lighting would re-render port 3 now...

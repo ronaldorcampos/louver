@@ -10,7 +10,7 @@ from unihub.curves import Governor, interpolate, normalize
 from unihub.daemon import Controller, serve
 from unihub.devices import StrimerPlus, UniHubALV2
 
-from .fakes import HUB_RESPONSES, STRIMER_RESPONSES, FakeSensors, FakeTransport
+from .fakes import Z, HUB_RESPONSES, STRIMER_RESPONSES, FakeSensors, FakeTransport
 
 
 # ---------------- curves ----------------
@@ -90,8 +90,8 @@ def test_first_tick_initialises_hub_and_applies_modes():
     assert st["strimer"]["connected"] and st["strimer"]["ports"] == 10
     # standard @ 50 C = 45 %, manual default 50 %, full = 100 %, mb_sync untouched
     assert r.speeds() == {0: 45, 1: 50, 2: 100}
-    assert bytes([0xE0, 0x10, 0x62, 0x88, 0, 0]) in r.hub_t.features  # port 4 handed to MB
-    assert bytes([0xE0, 0x10, 0x62, 0x10, 0, 0]) in r.hub_t.features  # port 1 taken from MB
+    assert Z([0xE0, 0x10, 0x62, 0x88, 0, 0]) in r.hub_t.features  # port 4 handed to MB
+    assert Z([0xE0, 0x10, 0x62, 0x10, 0, 0]) in r.hub_t.features  # port 1 taken from MB
     assert [g["rpm"] for g in st["hub"]["groups"]] == [1200, 800, 0, 1950]
 
 
@@ -148,7 +148,7 @@ def test_apply_config_pushes_only_changed_things():
     new["hub"]["groups"][0]["mode"] = "mb_sync"
     r.ctrl.apply_config(new)
     assert {o[1] for o in r.hub_t.outputs} == {0x34, 0x35}  # only port 3's rings
-    assert bytes([0xE0, 0x10, 0x62, 0x11, 0, 0]) in r.hub_t.features
+    assert Z([0xE0, 0x10, 0x62, 0x11, 0, 0]) in r.hub_t.features
 
 
 def test_shutdown_hands_fans_back_to_motherboard():
@@ -156,7 +156,7 @@ def test_shutdown_hands_fans_back_to_motherboard():
     r.ctrl.tick()
     r.hub_t.features.clear()
     r.ctrl.shutdown()
-    assert r.hub_t.features == [bytes([0xE0, 0x10, 0x62, (1 << (i + 4)) | (1 << i), 0, 0]) for i in range(4)]
+    assert r.hub_t.features == [Z([0xE0, 0x10, 0x62, (1 << (i + 4)) | (1 << i), 0, 0]) for i in range(4)]
     assert r.hub_t.closed and r.str_t.closed
 
 
@@ -165,7 +165,7 @@ def test_shutdown_fixed_speed():
     r.ctrl.tick()
     r.hub_t.features.clear()
     r.ctrl.shutdown()
-    assert r.hub_t.features == [bytes([0xE0, 0x20 | i, 0, 70]) for i in range(3)]
+    assert r.hub_t.features == [Z([0xE0, 0x20 | i, 0, 70]) for i in range(3)]
 
 
 # ---------------- HTTP ----------------
