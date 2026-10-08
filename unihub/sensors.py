@@ -89,6 +89,11 @@ class SensorHub:
             self._nv_cache = (time.monotonic(), vals)
             return vals
 
+    def missing(self, sid: str) -> list[str]:
+        """Parts of a sensor spec (``max:a,b`` or a single id) that can't be read now."""
+        parts = sid[4:].split(",") if sid.startswith("max:") else [sid]
+        return [p for p in parts if self.read(p) is None]
+
     def resolve(self, sid: str) -> str | None:
         if sid == "cpu":
             for chip, label in _CPU_PREFS:

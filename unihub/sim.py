@@ -23,7 +23,7 @@ class SimHubTransport:
     def get_input(self, report_id: int, length: int) -> bytes:
         if self._last == bytes([0x50, 0x01]):
             return bytes([0xE0, 0x50, 0x80, 0xC6, 0x12]).ljust(length, b"\0")
-        out = bytearray([0])
+        out = bytearray([0xF0])
         for d in self.duty:
             rpm = 0 if d == 0 else int(250 + 17.5 * d + random.uniform(-15, 15))
             out += rpm.to_bytes(2, "big")

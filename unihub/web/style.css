@@ -65,6 +65,7 @@ select, input[type=number], .name-input { background: var(--panel-2); border: 1p
 .port .bar { height: 4px; background: var(--panel-2); border-radius: 2px; margin-top: 10px; overflow: hidden; }
 .port .bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
 .port .fs { position: absolute; top: 10px; right: 10px; font-size: 10px; color: var(--bad); font-weight: 700; }
+.port .fs.warn { color: var(--warn); }
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 .chip, .seg button { background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; cursor: pointer; }

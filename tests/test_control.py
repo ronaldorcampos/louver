@@ -228,3 +228,14 @@ def test_serve_refuses_non_loopback():
     r = Rig()
     with pytest.raises(ValueError):
         serve(r.ctrl, "0.0.0.0:47999")
+
+
+def test_partially_unreadable_composite_sensor_is_reported():
+    cfg = cfg_with_modes("standard", "standard", "standard", "standard")
+    cfg["hub"]["groups"][3]["sensor"] = "max:cpu,gpu"
+    r = Rig(cfg)
+    r.ctrl.sensors = FakeSensors({"cpu": 50.0, "gpu": None, "max:cpu,gpu": 50.0})
+    r.ctrl.tick()
+    g = r.ctrl.state()["hub"]["groups"]
+    assert g[3]["missing"] == ["gpu"] and not g[3]["failsafe"]
+    assert g[0]["missing"] == []

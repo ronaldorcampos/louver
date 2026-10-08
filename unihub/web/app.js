@@ -79,7 +79,8 @@ function renderPorts() {
         el("span", {}, pct == null ? "MB" : pct + "%"),
         el("span", {}, s.temp == null ? "—" : s.temp.toFixed(1) + " °C")),
       el("div", { class: "bar" }, el("i")),
-      ...(s.failsafe ? [el("span", { class: "fs" }, "NO TEMP")] : []),
+      ...(s.failsafe ? [el("span", { class: "fs" }, "NO TEMP")]
+        : s.missing?.length ? [el("span", { class: "fs warn", title: "Unreadable: " + s.missing.join(", ") }, s.missing.join("+").toUpperCase() + " MISSING")] : []),
     ));
     box.lastChild.querySelector(".bar i").style.width = (pct ?? 0) + "%";
   });

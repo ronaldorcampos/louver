@@ -115,3 +115,44 @@ def test_strimer_mb_sync():
     s = StrimerPlus(t, sleep=lambda s: None)
     s.set_mb_rgb_sync(True)
     assert t.features == [bytes([0xE0, 0x10, 0x40, 1, 0, 0]), bytes([0xE0, 0x2C, 0, 0])]
+
+
+class StaleTransport(FakeTransport):
+    """Models the real hub: a reply appears only after `lag` input reads;
+    until then GET_INPUT keeps returning the previous reply."""
+
+    def __init__(self, responses, lag=3):
+        super().__init__(responses)
+        self.lag, self.pending, self.current = lag, 0, b"\xf0" + b"\x11" * 8
+
+    def send_feature(self, data):
+        super().send_feature(data)
+        self.pending = self.lag
+
+    def get_input(self, report_id, length):
+        if self.pending:
+            self.pending -= 1
+            if self.pending == 0:
+                self.current = self.responses.get(self._last, self.current)
+        return self.current.ljust(length, b"\0")
+
+
+def test_queries_wait_past_stale_replies():
+    t = StaleTransport(HUB_RESPONSES)
+    h = UniHubALV2(t, sleep=lambda s: None)
+    fw = h.read_firmware()  # buffer starts out holding an RPM reply
+    assert fw.valid_alv2
+    assert h.read_rpms() == [1200, 800, 0, 1950]  # buffer held the firmware reply
+
+
+def test_query_times_out_instead_of_returning_garbage():
+    now = [0.0]
+
+    def tick(s):
+        now[0] += s
+
+    t = StaleTransport(HUB_RESPONSES, lag=10**9)
+    t.current = bytes([0xE0, 0x50, 0x80, 0xC6, 0x04])  # firmware reply stuck in the buffer
+    h = UniHubALV2(t, sleep=tick, clock=lambda: now[0])
+    with pytest.raises(TimeoutError):
+        h.read_rpms()

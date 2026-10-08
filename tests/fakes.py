@@ -39,7 +39,7 @@ class FakeTransport:
 HUB_RESPONSES = {
     bytes([0x50, 0x01]): bytes([0xE0, 0x50, 0x80, 0xC6, 0x12]),
     # 1 leading byte then 4 BE u16: 1200, 800, 0, 1950
-    bytes([0x50, 0x00]): bytes([0x00, 0x04, 0xB0, 0x03, 0x20, 0x00, 0x00, 0x07, 0x9E]),
+    bytes([0x50, 0x00]): bytes([0xF0, 0x04, 0xB0, 0x03, 0x20, 0x00, 0x00, 0x07, 0x9E]),
 }
 
 STRIMER_RESPONSES = {
@@ -54,6 +54,10 @@ class FakeSensors:
 
     def read(self, sid: str):
         return self.values.get(sid)
+
+    def missing(self, sid: str):
+        parts = sid[4:].split(",") if sid.startswith("max:") else [sid]
+        return [p for p in parts if self.values.get(p) is None]
 
     def list(self):
         return [{"id": k, "label": k, "value": v} for k, v in self.values.items()]

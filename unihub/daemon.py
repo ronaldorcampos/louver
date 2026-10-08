@@ -75,7 +75,8 @@ class Controller:
         self._hub_temp_key: list[float | None] = [None] * 4
         self._strimer_temp_key: list[float | None] = [None] * 12
         self.groups_state = [
-            {"rpm": 0, "percent": None, "temp": None, "target": None, "failsafe": False} for _ in range(4)
+            {"rpm": 0, "percent": None, "temp": None, "target": None, "failsafe": False, "missing": []}
+            for _ in range(4)
         ]
 
     # --- device lifecycle ---------------------------------------------------
@@ -239,7 +240,9 @@ class Controller:
             for i in range(4):
                 target, temp, failsafe = self.target_for(i)
                 st = self.groups_state[i]
-                st.update(temp=temp, target=target, failsafe=failsafe)
+                sensor = self.cfg["hub"]["groups"][i]["sensor"]
+                missing = self.sensors.missing(sensor) if target is not None else []
+                st.update(temp=temp, target=target, failsafe=failsafe, missing=missing)
                 if target is None:
                     self._governors[i].reset()
                     st["percent"] = None

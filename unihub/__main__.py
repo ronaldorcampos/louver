@@ -90,7 +90,8 @@ def cmd_status(args, cfg: dict, path: Path) -> int:
     for i, (g, gc) in enumerate(zip(hub["groups"], cfg["hub"]["groups"])):
         pct = "MB" if g["percent"] is None else f"{g['percent']:>3}%"
         temp = "  -  " if g["temp"] is None else f"{g['temp']:4.1f}C"
-        flag = "  FAILSAFE (no temp)" if g["failsafe"] else ""
+        flag = "  FAILSAFE (no temp)" if g["failsafe"] else (
+            f"  (unreadable: {', '.join(g['missing'])})" if g.get("missing") else "")
         print(f"  {gc['name']:<12} {gc['mode']:<9} {pct}  {g['rpm']:>5} rpm  {temp}{flag}")
     s = st["strimer"]
     print(f"{s['name']}: {'connected' if s['connected'] else 'not connected'} {s['firmware']}")

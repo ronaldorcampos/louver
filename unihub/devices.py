@@ -128,10 +128,20 @@ class LightingEffect:
 
 class _Device:
     cmd_delay = 0.02
+    # Measured on a real AL V2: replies land 100-165 ms after the query, and
+    # until then GET_INPUT returns whatever the previous query left behind.
+    reply_timeout = 0.5
+    reply_poll = 0.01
 
-    def __init__(self, transport: Transport, sleep: Callable[[float], None] = time.sleep):
+    def __init__(
+        self,
+        transport: Transport,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ):
         self.t = transport
         self._sleep = sleep
+        self._clock = clock
         self.lock = threading.RLock()
 
     def _feature(self, *payload: int) -> None:
@@ -144,12 +154,19 @@ class _Device:
             self.t.write(bytes([REPORT_ID]) + payload)
             self._sleep(self.cmd_delay)
 
-    def _input(self, length: int) -> bytes:
+    def _query(self, cmd: tuple[int, ...], is_reply: Callable[[bytes], bool], length: int) -> bytes:
+        """Send a query and poll the input report until a reply of the
+        expected kind shows up (never trust the first read: it's stale)."""
         with self.lock:
-            data = self.t.get_input(REPORT_ID, 64)
-        if len(data) < length:
-            raise IOError(f"short input report: {len(data)} < {length}")
-        return data[:length]
+            self.t.send_feature(bytes([REPORT_ID, *cmd]))
+            deadline = self._clock() + self.reply_timeout
+            while True:
+                data = self.t.get_input(REPORT_ID, 64)
+                if len(data) >= length and is_reply(data):
+                    return data[:length]
+                if self._clock() >= deadline:
+                    raise TimeoutError(f"no reply to query {bytes(cmd).hex()} (last: {data[:length].hex()})")
+                self._sleep(self.reply_poll)
 
     def close(self) -> None:
         self.t.close()
@@ -164,22 +181,20 @@ class UniHubALV2(_Device):
     OUTER_LEDS = 12
     PALETTE = 6
 
-    def __init__(self, transport: Transport, sleep: Callable[[float], None] = time.sleep):
-        super().__init__(transport, sleep)
+    def __init__(self, transport: Transport, sleep: Callable[[float], None] = time.sleep, clock=time.monotonic):
+        super().__init__(transport, sleep, clock)
         self.fan_counts = [3] * self.GROUPS
 
     # --- info ---------------------------------------------------------------
     def read_firmware(self) -> Firmware:
-        with self.lock:
-            self._feature(0x50, 0x01)
-            d = self._input(5)
+        d = self._query((0x50, 0x01), lambda r: r[0] == 0xE0 and r[1] == 0x50, 5)
         return Firmware(*d[:5])
 
     def read_rpms(self) -> list[int]:
-        with self.lock:
-            self._feature(0x50, 0x00)
-            d = self._input(9)
-        # V2 hubs: 1 leading byte, then four big-endian u16 RPMs.
+        # Reply: 0xF0 marker, then four big-endian u16 RPMs. The hub refreshes
+        # these only every ~0.5-1 s, so a reply left by the previous RPM query
+        # is acceptable; a firmware reply (0xE0...) is not.
+        d = self._query((0x50, 0x00), lambda r: r[0] == 0xF0, 9)
         return [int.from_bytes(d[1 + 2 * i : 3 + 2 * i], "big") for i in range(4)]
 
     # --- fans ---------------------------------------------------------------
@@ -304,15 +319,13 @@ class StrimerPlus(_Device):
     PORTS_PER_CHANNEL = 6
     LEDS_PER_PORT = 27
 
-    def __init__(self, transport: Transport, sleep: Callable[[float], None] = time.sleep):
-        super().__init__(transport, sleep)
+    def __init__(self, transport: Transport, sleep: Callable[[float], None] = time.sleep, clock=time.monotonic):
+        super().__init__(transport, sleep, clock)
         self.channel2_ports = 6
         self.port_modes = [1] * 12
 
     def read_firmware(self) -> str:
-        with self.lock:
-            self._feature(0x50, 0x00)
-            d = self._input(5)
+        d = self._query((0x50, 0x00), lambda r: r[0] == 0xE0 and r[1] == 0x52, 5)
         if tuple(d[:4]) != (0xE0, 0x52, 0xFF, 0x40):
             return "unknown"
         hi, lo = d[4] >> 4, d[4] & 0x0F
@@ -322,12 +335,12 @@ class StrimerPlus(_Device):
         return f"v{n // 10}.{n % 10}"
 
     def read_channel2_ports(self) -> int:
-        with self.lock:
-            self._feature(0x50, 0x01)
-            count = self._input(1)[0]
-        if count in (4, 6):
-            self.channel2_ports = count
-        return self.channel2_ports
+        try:
+            count = self._query((0x50, 0x01), lambda r: r[0] in (4, 6), 1)[0]
+        except TimeoutError:
+            return self.channel2_ports  # keep the 6-port default
+        self.channel2_ports = count
+        return count
 
     @property
     def port_count(self) -> int:
