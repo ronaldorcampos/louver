@@ -19,6 +19,12 @@ library and talks to the controllers directly through `/dev/hidraw*`.
 - On exit: hand the fans back to the motherboard (default), set a fixed
   speed, or keep the last speed.
 
+**Motherboard fan headers** (Nuvoton nct67xx / ITE it87 boards)
+- Each header is opt-in and starts on **BIOS control**; pick a mode to let UniHub drive it with the same presets and curves.
+- Whenever UniHub stops, every header it drove goes back to the BIOS's own curve.
+- `unihub mb-list` shows the headers; `unihub mb-test N PCT` runs one at a set speed for 10 s and then hands it back.
+- Keep pump headers on BIOS control.
+
 **Lighting**
 - **Themes:** Rainbow Wave, Ocean, Sunset, Cyberpunk, Arctic, Inferno,
   Forest, Vaporwave, Thermal, Stealth. Each one sets the hub and the Strimer

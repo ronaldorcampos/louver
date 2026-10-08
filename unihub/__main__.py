@@ -5,6 +5,8 @@
   unihub status            show RPM / duty / temps from the running daemon
   unihub set PORT PERCENT  put a port in manual mode at PERCENT (via daemon)
   unihub probe             read-only hardware check, no daemon needed
+  unihub mb-list           motherboard fan headers: RPM, PWM, mode (read-only)
+  unihub mb-test N PCT     run motherboard header N at PCT for a few seconds, then hand it back to BIOS
 """
 
 from __future__ import annotations
@@ -49,7 +51,9 @@ def cmd_daemon(args, cfg: dict, path: Path) -> int:
         # Demo never touches real hardware or the real config file.
         ctrl = Controller(cfg, None, SensorHub(), opener=open_sim)
     else:
-        ctrl = Controller(cfg, path, SensorHub())
+        from .mbfans import MotherboardFans
+
+        ctrl = Controller(cfg, path, SensorHub(), mbfans=MotherboardFans())
     stop = threading.Event()
 
     def _stop(*_):
@@ -141,6 +145,47 @@ def cmd_probe(args, cfg: dict, path: Path) -> int:
     return rc
 
 
+def cmd_mb_list(args, cfg: dict, path: Path) -> int:
+    from .mbfans import MotherboardFans
+
+    mb = MotherboardFans()
+    if not mb.present:
+        print("no supported motherboard fan chip found", file=sys.stderr)
+        return 1
+    names = {h["index"]: (h["name"], h["mode"]) for h in cfg["motherboard"]["headers"]}
+    print(f"{mb.chip} at {mb.dir}  ({'writable' if mb.writable() else 'read-only: install the hwmon udev rule'})")
+    for d in mb.describe():
+        name, mode = names.get(d["index"], ("", "bios"))
+        auto = "manual" if d["enable"] == 1 else f"auto({d['enable']})"
+        print(f"  header {d['index']}: {d['rpm']:>5} rpm  pwm {d['pwm']:>3}/255 ({round((d['pwm'] or 0) / 2.55):>3}%)  {auto:<8} {mode:<8} {name}")
+    return 0
+
+
+def cmd_mb_test(args, cfg: dict, path: Path) -> int:
+    import time
+
+    from .mbfans import MotherboardFans
+
+    mb = MotherboardFans()
+    if args.header not in mb.headers:
+        print(f"no header {args.header}; have {sorted(mb.headers)}", file=sys.stderr)
+        return 1
+    h = mb.headers[args.header]
+    print(f"header {args.header}: {h.rpm} rpm, pwm {h.pwm}, enable {h.enable} (before)")
+    try:
+        mb.set_percent(args.header, args.percent)
+        for s in range(args.seconds):
+            time.sleep(1)
+            print(f"  {s + 1:>2}s  {h.rpm:>5} rpm  (pwm {h.pwm})", flush=True)
+    except PermissionError:
+        print("not writable: install the hwmon udev rule (see README)", file=sys.stderr)
+        return 1
+    finally:
+        mb.release(args.header)
+    print(f"header {args.header}: handed back to BIOS (enable {h.enable})")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="unihub", description="Lian Li UNI HUB control for Linux")
     p.add_argument("--config", type=Path, default=None, help="config file (default ~/.config/unihub/config.json)")
@@ -155,6 +200,11 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("port", type=int, choices=range(1, 5))
     s.add_argument("percent", type=int, choices=range(0, 101), metavar="PERCENT")
     sub.add_parser("probe")
+    sub.add_parser("mb-list")
+    t = sub.add_parser("mb-test")
+    t.add_argument("header", type=int)
+    t.add_argument("percent", type=int, choices=range(0, 101), metavar="PERCENT")
+    t.add_argument("--seconds", type=int, default=10)
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
@@ -164,7 +214,8 @@ def main(argv: list[str] | None = None) -> int:
     except cfgmod.ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         return 2
-    return {"daemon": cmd_daemon, "ui": cmd_ui, "status": cmd_status, "set": cmd_set, "probe": cmd_probe}[args.cmd](
+    return {"daemon": cmd_daemon, "ui": cmd_ui, "status": cmd_status, "set": cmd_set, "probe": cmd_probe,
+            "mb-list": cmd_mb_list, "mb-test": cmd_mb_test}[args.cmd](
         args, cfg, path
     )
 

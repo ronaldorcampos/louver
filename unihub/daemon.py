@@ -16,6 +16,7 @@ from . import config as cfgmod
 from .curves import PRESETS, Governor, interpolate
 from .devices import DRIVERS, VENDOR_ID, LightingEffect, StrimerPlus, UniHubALV2
 from .hidraw import HidrawTransport, enumerate_hidraw
+from .mbfans import MotherboardFans
 from .rgbfx import SOFTWARE_MODES, render_hub_port, render_strimer_port
 from .sensors import SensorHub
 from .themes import THEMES, apply_theme
@@ -55,8 +56,14 @@ class Controller:
         sensors: SensorHub,
         opener: Callable[[frozenset[int]], dict[int, object]] = open_devices,
         clock: Callable[[], float] = time.monotonic,
+        mbfans: MotherboardFans | None = None,
     ):
         self.cfg = cfgmod.validate(cfg)
+        self.mb = mbfans if mbfans is not None and mbfans.present else None
+        self._mb_governors: dict[int, Governor] = {}
+        self._mb_sent: dict[int, tuple[int, float]] = {}
+        self.mb_state: dict[int, dict] = {}
+        self.mb_error = ""
         self.cfg_path = cfg_path
         self.sensors = sensors
         self._open = opener
@@ -223,9 +230,11 @@ class Controller:
     # --- control ------------------------------------------------------------
     def target_for(self, i: int) -> tuple[float | None, float | None, bool]:
         """(target percent or None for mb_sync, temp, failsafe)."""
-        g = self.cfg["hub"]["groups"][i]
+        return self._target(self.cfg["hub"]["groups"][i])
+
+    def _target(self, g: dict) -> tuple[float | None, float | None, bool]:
         mode = g["mode"]
-        if mode == "mb_sync":
+        if mode in ("mb_sync", "bios"):
             return None, None, False
         temp = self.sensors.read(g["sensor"])
         if mode == "manual":
@@ -277,6 +286,42 @@ class Controller:
                 except OSError as e:
                     self._drop("hub", e)
             self._refresh_temperature_lighting()
+            self._tick_motherboard(now, dt, floor)
+
+    def _tick_motherboard(self, now: float, dt: float, floor: int) -> None:
+        if self.mb is None:
+            return
+        configured = {h["index"]: h for h in self.cfg["motherboard"]["headers"]}
+        for idx, header in self.mb.headers.items():
+            g = configured.get(idx)
+            st = self.mb_state.setdefault(idx, {})
+            st.update(rpm=header.rpm, percent=None, temp=None, failsafe=False, missing=[])
+            target, temp, failsafe = self._target(g) if g else (None, None, False)
+            if target is None:  # BIOS control
+                self._mb_governors.pop(idx, None)
+                self._mb_sent.pop(idx, None)
+                if header.original_enable is not None:
+                    try:
+                        self.mb.release(idx)
+                    except OSError as e:
+                        self.mb_error = f"could not hand header {idx} back to BIOS: {e}"
+                continue
+            gov = self._mb_governors.setdefault(idx, Governor())
+            if g["mode"] == "manual":
+                gov.reset()
+            pct = 100 if failsafe else int(round(gov.step(max(target, float(floor)), dt)))
+            st.update(percent=pct, temp=temp, failsafe=failsafe,
+                      missing=self.sensors.missing(g["sensor"]) if not failsafe else [])
+            last = self._mb_sent.get(idx)
+            if last is None or last[0] != pct or now - last[1] >= KEEPALIVE_EVERY:
+                try:
+                    self.mb.set_percent(idx, pct)
+                    self._mb_sent[idx] = (pct, now)
+                    self.mb_error = ""
+                except PermissionError:
+                    self.mb_error = "motherboard fan controls aren't writable: install the hwmon udev rule (README)"
+                except OSError as e:
+                    self.mb_error = f"motherboard header {idx}: {e}"
 
     # --- config -------------------------------------------------------------
     def apply_config(self, new: dict) -> dict:
@@ -372,11 +417,20 @@ class Controller:
                     "firmware": self.strimer_firmware,
                     "ports": self.strimer.port_count if self.strimer else 0,
                 },
+                "motherboard": {
+                    "present": self.mb is not None,
+                    "chip": self.mb.chip if self.mb else "",
+                    "writable": self.mb.writable() if self.mb else False,
+                    "headers": [{"index": i, **copy.deepcopy(s)} for i, s in sorted(self.mb_state.items())],
+                    "error": self.mb_error,
+                },
                 "error": self.error,
             }
 
     def shutdown(self) -> None:
         with self.lock:
+            if self.mb is not None:
+                self.mb.release_all()  # BIOS curves take back over
             if self.strimer is not None:
                 self.strimer.close()
                 self.strimer = None
@@ -416,6 +470,7 @@ _SOFTWARE_META = [
 def meta(ctrl: Controller) -> dict:
     return {
         "fan_modes": list(cfgmod.FAN_MODES),
+        "mb_fan_modes": list(cfgmod.MB_FAN_MODES),
         "presets": PRESETS,
         "hub_lighting_modes": UniHubALV2.lighting_modes() + _SOFTWARE_META,
         "strimer_lighting_modes": StrimerPlus.lighting_modes() + _SOFTWARE_META,

@@ -2,13 +2,13 @@
 
 const MODE_LABELS = {
   quiet: "Quiet", standard: "Standard", high: "High Speed", full: "Full Speed",
-  manual: "Fixed", curve: "Custom Curve", mb_sync: "MB PWM Sync",
+  manual: "Fixed", curve: "Custom Curve", mb_sync: "MB PWM Sync", bios: "BIOS control",
 };
 const T_MIN = 20, T_MAX = 100;
 const $ = (id) => document.getElementById(id);
 
 let cfg = null, meta = null, state = null;
-let selPort = 0, lightPort = 0;  // lightPort 4 = all ports
+let sel = { kind: "hub", i: 2 }, lightPort = 0;  // lightPort 4 = all ports
 let saveTimer = null, dragging = false, editSeq = 0;
 
 async function api(path, body) {
@@ -65,31 +65,67 @@ document.querySelectorAll(".nav-item").forEach((b) => b.addEventListener("click"
 }));
 
 // ---------------- fan speed ----------------
+// The selected card is a hub port (cfg.hub.groups[i]) or a motherboard header
+// (cfg.motherboard.headers entry, created on first selection, BIOS by default).
+function mbEntry(index) {
+  let h = cfg.motherboard.headers.find((x) => x.index === index);
+  if (!h) {
+    h = { index, name: `Header ${index}`, mode: "bios", manual_percent: 50, sensor: "cpu", curve: meta.presets.standard.map((p) => [...p]) };
+    cfg.motherboard.headers.push(h);
+  }
+  return h;
+}
+const selCfg = () => (sel.kind === "hub" ? cfg.hub.groups[sel.i] : mbEntry(sel.i));
+const selState = () => (sel.kind === "hub" ? state?.hub.groups[sel.i] : state?.motherboard.headers.find((h) => h.index === sel.i));
+
+function portCard(g, s, selected, onclick, sub) {
+  const pct = s.percent;
+  const card = el("button", { class: "port" + (selected ? " sel" : ""), onclick },
+    el("div", { class: "pname" }, g.name),
+    el("div", { class: "pmode" }, MODE_LABELS[g.mode] + sub),
+    el("div", { class: "rpm" }, String(s.rpm ?? 0), el("small", {}, " RPM")),
+    el("div", { class: "meta" },
+      el("span", {}, pct == null ? (g.mode === "bios" ? "BIOS" : "MB") : pct + "%"),
+      el("span", {}, s.temp == null ? "—" : s.temp.toFixed(1) + " °C")),
+    el("div", { class: "bar" }, el("i")),
+    ...(s.failsafe ? [el("span", { class: "fs" }, "NO TEMP")]
+      : s.missing?.length ? [el("span", { class: "fs warn", title: "Unreadable: " + s.missing.join(", ") }, s.missing.join("+").toUpperCase() + " MISSING")] : []),
+  );
+  card.querySelector(".bar i").style.width = (pct ?? 0) + "%";
+  return card;
+}
+
+function renderMbPorts() {
+  const m = state?.motherboard;
+  $("mb-section").classList.toggle("hidden", !m?.present);
+  if (!m?.present) return;
+  $("mb-chip").textContent = m.chip;
+  const warn = m.error || (!m.writable ? "Read-only: install the hwmon udev rule (README) to control these headers." : "");
+  $("mb-banner").textContent = warn;
+  $("mb-banner").classList.toggle("hidden", !warn);
+  const shown = m.headers.filter((h) => (h.rpm ?? 0) > 0 || cfg.motherboard.headers.some((c) => c.index === h.index && c.mode !== "bios"));
+  $("mb-ports").replaceChildren(...shown.map((h) => {
+    const c = cfg.motherboard.headers.find((x) => x.index === h.index) || { name: `Header ${h.index}`, mode: "bios" };
+    return portCard(c, h, sel.kind === "mb" && sel.i === h.index, () => { sel = { kind: "mb", i: h.index }; renderFans(); }, ` · header ${h.index}`);
+  }));
+}
+
 function renderPorts() {
   const box = $("ports");
-  box.replaceChildren();
-  cfg.hub.groups.forEach((g, i) => {
-    const s = state?.hub.groups[i] || {};
-    const pct = s.percent;
-    box.append(el("button", { class: "port" + (i === selPort ? " sel" : ""), onclick: () => { selPort = i; renderFans(); } },
-      el("div", { class: "pname" }, g.name),
-      el("div", { class: "pmode" }, MODE_LABELS[g.mode] + " · " + g.fans + " fan" + (g.fans === 1 ? "" : "s")),
-      el("div", { class: "rpm" }, String(s.rpm ?? 0), el("small", {}, " RPM")),
-      el("div", { class: "meta" },
-        el("span", {}, pct == null ? "MB" : pct + "%"),
-        el("span", {}, s.temp == null ? "—" : s.temp.toFixed(1) + " °C")),
-      el("div", { class: "bar" }, el("i")),
-      ...(s.failsafe ? [el("span", { class: "fs" }, "NO TEMP")]
-        : s.missing?.length ? [el("span", { class: "fs warn", title: "Unreadable: " + s.missing.join(", ") }, s.missing.join("+").toUpperCase() + " MISSING")] : []),
-    ));
-    box.lastChild.querySelector(".bar i").style.width = (pct ?? 0) + "%";
-  });
+  box.replaceChildren(...cfg.hub.groups.map((g, i) => portCard(g, state?.hub.groups[i] || {}, sel.kind === "hub" && sel.i === i,
+    () => { sel = { kind: "hub", i }; renderFans(); }, " · " + g.fans + " fan" + (g.fans === 1 ? "" : "s"))));
+  renderMbPorts();
 }
 
 function renderFans() {
   renderPorts();
-  const g = cfg.hub.groups[selPort];
+  const g = selCfg();
+  const isMb = sel.kind === "mb";
   $("port-name").value = g.name;
+  $("port-fans-label").classList.toggle("hidden", isMb);
+  $("mb-hint").classList.toggle("hidden", !isMb);
+  // No bulk apply for motherboard headers: one of them may be a pump.
+  $("apply-all").classList.toggle("hidden", isMb);
 
   const sens = $("port-sensor");
   sens.replaceChildren(...meta.sensors.map((s) =>
@@ -102,10 +138,10 @@ function renderFans() {
   fans.value = g.fans;
 
   const chips = $("mode-chips");
-  chips.replaceChildren(...meta.fan_modes.map((m) => el("button", {
+  chips.replaceChildren(...(isMb ? meta.mb_fan_modes : meta.fan_modes).map((m) => el("button", {
     class: "chip" + (m === g.mode ? " on" : ""),
     onclick: () => {
-      const cur = cfg.hub.groups[selPort];
+      const cur = selCfg();
       if (m === "curve" && cur.mode in meta.presets) cur.curve = meta.presets[cur.mode].map((p) => [...p]);
       cur.mode = m; save(0); renderFans();
     },
@@ -114,27 +150,30 @@ function renderFans() {
   $("manual-box").classList.toggle("hidden", g.mode !== "manual");
   $("manual-range").value = g.manual_percent;
   $("manual-val").textContent = g.manual_percent + "%";
-  $("curve-box").classList.toggle("hidden", g.mode === "manual" || g.mode === "mb_sync");
+  $("curve-box").classList.toggle("hidden", g.mode === "manual" || g.mode === "mb_sync" || g.mode === "bios");
   $("curve-hint").textContent = g.mode === "curve"
     ? "Drag points to shape the curve. Double-click to add a point, right-click a point to remove it."
     : "Preset curve. Pick Custom Curve to start editing from this shape.";
   drawCurve();
 }
 
-$("port-name").addEventListener("change", (e) => { cfg.hub.groups[selPort].name = e.target.value || `Port ${selPort + 1}`; save(0); renderPorts(); });
-$("port-sensor").addEventListener("change", (e) => { cfg.hub.groups[selPort].sensor = e.target.value; save(0); });
-$("port-fans").addEventListener("change", (e) => { cfg.hub.groups[selPort].fans = +e.target.value; save(0); renderPorts(); });
+$("port-name").addEventListener("change", (e) => {
+  selCfg().name = e.target.value || (sel.kind === "hub" ? `Port ${sel.i + 1}` : `Header ${sel.i}`); save(0); renderPorts();
+});
+$("port-sensor").addEventListener("change", (e) => { selCfg().sensor = e.target.value; save(0); });
+$("port-fans").addEventListener("change", (e) => { selCfg().fans = +e.target.value; save(0); renderPorts(); });
 $("manual-range").addEventListener("input", (e) => {
-  cfg.hub.groups[selPort].manual_percent = +e.target.value;
+  selCfg().manual_percent = +e.target.value;
   $("manual-val").textContent = e.target.value + "%";
   save();
 });
 $("apply-all").addEventListener("click", () => {
-  const src = cfg.hub.groups[selPort];
-  cfg.hub.groups.forEach((g, i) => {
-    if (i === selPort) return;
+  if (sel.kind !== "hub") return;
+  const src = selCfg();
+  for (const g of cfg.hub.groups) {
+    if (g === src) continue;
     Object.assign(g, { mode: src.mode, manual_percent: src.manual_percent, sensor: src.sensor, curve: src.curve.map((p) => [...p]) });
-  });
+  }
   save(0); renderFans();
 });
 
@@ -149,13 +188,13 @@ const NS = "http://www.w3.org/2000/svg";
 const sv = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
 
 function curvePoints() {
-  const g = cfg.hub.groups[selPort];
+  const g = selCfg();
   return g.mode === "curve" ? g.curve : (meta.presets[g.mode] || g.curve);
 }
 
 function drawCurve() {
   const svg = $("curve");
-  const g = cfg.hub.groups[selPort];
+  const g = selCfg();
   const editable = g.mode === "curve";
   svg.classList.toggle("readonly", !editable);
   svg.replaceChildren();
@@ -173,7 +212,7 @@ function drawCurve() {
   svg.append(sv("polygon", { class: "area", points: `${tx(T_MIN)},${ty(0)} ${path} ${tx(T_MAX)},${ty(0)}` }));
   svg.append(sv("polyline", { class: "line", points: path }));
 
-  const s = state?.hub.groups[selPort];
+  const s = selState();
   if (s && s.temp != null) {
     const t = clamp(s.temp, T_MIN, T_MAX);
     svg.append(sv("line", { class: "now", x1: tx(t), x2: tx(t), y1: PAD.t, y2: H - PAD.b }));
@@ -185,7 +224,7 @@ function drawCurve() {
       c.addEventListener("pointerdown", (e) => startDrag(e, i));
       c.addEventListener("contextmenu", (e) => {
         e.preventDefault();
-        const cur = cfg.hub.groups[selPort].curve;
+        const cur = selCfg().curve;
         if (cur.length > 2) { cur.splice(i, 1); save(0); drawCurve(); }
       });
     }
@@ -200,7 +239,7 @@ function svgPoint(e) {
 
 function startDrag(e, i) {
   e.preventDefault();
-  const svg = $("curve"), curve = cfg.hub.groups[selPort].curve;
+  const svg = $("curve"), curve = selCfg().curve;
   svg.setPointerCapture(e.pointerId);
   dragging = true;
   const move = (ev) => {
@@ -216,7 +255,7 @@ function startDrag(e, i) {
 }
 
 $("curve").addEventListener("dblclick", (e) => {
-  const g = cfg.hub.groups[selPort];
+  const g = selCfg();
   if (g.mode !== "curve") return;
   const [x, y] = svgPoint(e);
   g.curve.push([Math.round(clamp(fx(x), T_MIN, T_MAX)), Math.round(clamp(fy(y), 0, 100))]);

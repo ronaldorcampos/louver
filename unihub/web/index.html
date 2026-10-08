@@ -35,15 +35,21 @@
     <section class="view" id="view-fans">
       <h1>Fan Speed</h1>
       <div class="ports" id="ports"></div>
+      <div id="mb-section" class="hidden">
+        <h3>Motherboard headers <small id="mb-chip"></small></h3>
+        <div class="banner hidden" id="mb-banner"></div>
+        <div class="ports" id="mb-ports"></div>
+      </div>
       <div class="panel" id="fan-detail">
         <div class="panel-head">
           <input class="name-input" id="port-name" maxlength="20" aria-label="Port name">
           <div class="row gap">
             <label>Sensor <select id="port-sensor"></select></label>
-            <label>Fans on port <select id="port-fans"></select></label>
+            <label id="port-fans-label">Fans on port <select id="port-fans"></select></label>
           </div>
         </div>
         <div class="chips" id="mode-chips"></div>
+        <p class="hint hidden" id="mb-hint">BIOS control leaves this header on the board's own curve. Keep pump headers on BIOS control (or Full Speed).</p>
         <div id="manual-box" class="hidden">
           <label class="slider-label">Fixed speed <b id="manual-val"></b></label>
           <input type="range" min="0" max="100" id="manual-range">

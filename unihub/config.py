@@ -12,6 +12,8 @@ from .devices import STRIMER_MODES, ALV2_INNER_MODES, ALV2_OUTER_MODES, parse_co
 from .rgbfx import SOFTWARE_MODES
 
 FAN_MODES = ("quiet", "standard", "high", "full", "manual", "curve", "mb_sync")
+# Motherboard headers: "bios" leaves the header on the board's own curve.
+MB_FAN_MODES = ("bios", "quiet", "standard", "high", "full", "manual", "curve")
 EXIT_ACTIONS = ("mb_sync", "hold", "fixed")
 
 
@@ -60,6 +62,8 @@ DEFAULTS: dict = {
         "ports": [_default_light() for _ in range(STRIMER_PORTS)],
     },
     "theme": None,
+    # Opt-in per header: [{"index": 2, "name": ..., "mode": "bios"|..., ...}]
+    "motherboard": {"headers": []},
 }
 
 
@@ -133,6 +137,25 @@ def validate(cfg: dict) -> dict:
         except (ValueError, TypeError) as e:
             raise ConfigError(f"group {i}: bad curve: {e}") from None
         groups[i] = full
+    seen = set()
+    headers = cfg["motherboard"]["headers"]
+    for k, h in enumerate(headers):
+        if not isinstance(h, dict) or not isinstance(h.get("index"), int) or not 1 <= h["index"] <= 16:
+            raise ConfigError(f"motherboard header {k}: index must be an integer 1..16")
+        if h["index"] in seen:
+            raise ConfigError(f"motherboard header {h['index']} listed twice")
+        seen.add(h["index"])
+        full = _merge({**_default_group(0), "name": f"Header {h['index']}", "mode": "bios"}, h)
+        full.pop("fans", None)
+        if full["mode"] not in MB_FAN_MODES:
+            raise ConfigError(f"motherboard header {h['index']}: mode must be one of {MB_FAN_MODES}")
+        if not 0 <= float(full["manual_percent"]) <= 100:
+            raise ConfigError(f"motherboard header {h['index']}: manual_percent must be 0..100")
+        try:
+            full["curve"] = [list(p) for p in normalize(full["curve"])]
+        except (ValueError, TypeError) as e:
+            raise ConfigError(f"motherboard header {h['index']}: bad curve: {e}") from None
+        headers[k] = full
     mm = cfg["hub"]["mode_map"]
     known = set(ALV2_INNER_MODES) | set(ALV2_OUTER_MODES)
     for ring in ("inner", "outer"):
