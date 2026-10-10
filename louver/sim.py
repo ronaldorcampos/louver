@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import random
+import tempfile
+from pathlib import Path
 
 from .devices import StrimerPlus, UniHubALV2
+from .mbfans import MotherboardFans
 
 
 class SimHubTransport:
@@ -59,3 +62,19 @@ def open_sim(skip=frozenset()) -> dict[int, object]:
     if StrimerPlus.PID not in skip:
         out[StrimerPlus.PID] = StrimerPlus(SimStrimerTransport(), sleep=lambda s: None)
     return out
+
+
+def sim_motherboard() -> MotherboardFans:
+    """A Nuvoton chip in a temporary sysfs-like tree: a header with nothing on
+    it, a radiator header and a pump header. Writes land in the temp files."""
+    tmp = tempfile.TemporaryDirectory(prefix="louver-demo-hwmon-")
+    d = Path(tmp.name) / "hwmon0"
+    d.mkdir()
+    (d / "name").write_text("nct6798\n")
+    for i, rpm, pwm in ((1, 0, 169), (2, 1450, 140), (7, 3020, 255)):
+        (d / f"fan{i}_input").write_text(f"{rpm}\n")
+        (d / f"pwm{i}").write_text(f"{pwm}\n")
+        (d / f"pwm{i}_enable").write_text("5\n")
+    mb = MotherboardFans(Path(tmp.name))
+    mb._demo_dir = tmp  # removed with the object
+    return mb

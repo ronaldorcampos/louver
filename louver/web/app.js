@@ -8,8 +8,14 @@ const T_MIN = 20, T_MAX = 100;
 const $ = (id) => document.getElementById(id);
 
 let cfg = null, meta = null, state = null;
-let sel = { kind: "hub", i: 2 }, lightPort = 0;  // lightPort 4 = all ports
+// The selected zone: a hub port (i = 0..3), a motherboard header (i = its
+// number) or the Strimer. view is "zone" or "settings".
+let sel = { kind: "hub", i: 2 }, view = "zone";
 let saveTimer = null, dragging = false, editSeq = 0;
+// savePending: an edit of ours hasn't reached the daemon yet. cfgRev: the
+// daemon's config revision our copy matches (see adoptOutsideChanges); null
+// until the first poll checks, since cfg and state load in parallel.
+let savePending = false, cfgRev = null;
 
 async function api(path, body) {
   const opts = body === undefined ? {} : {
@@ -35,16 +41,33 @@ function toast(msg) {
 // so a slow response can't roll back a newer local change.
 function save(delay = 250) {
   const seq = ++editSeq;
+  savePending = true;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try {
       const saved = await api("/api/config", cfg);
-      if (seq === editSeq) cfg = saved;
+      if (seq === editSeq) { cfg = saved; savePending = false; }
     } catch (e) {
       toast("Not saved: " + e.message);
-      if (seq === editSeq) { cfg = await api("/api/config"); renderAll(); }
+      if (seq === editSeq) {
+        try { cfg = await api("/api/config"); renderAll(); } finally { savePending = false; }
+      }
     }
   }, delay);
+}
+
+// Someone else changed the config (the tray, another window, a theme): take
+// their copy, unless an edit of ours is still on its way. Returns true if it
+// re-rendered.
+async function adoptOutsideChanges() {
+  if (state.config_rev === cfgRev || savePending || dragging) return false;
+  const rev = state.config_rev, fresh = await api("/api/config");
+  if (savePending || dragging) return false;  // an edit started while we fetched
+  cfgRev = rev;
+  if (JSON.stringify(fresh) === JSON.stringify(cfg)) return false;  // e.g. our own save
+  cfg = fresh;
+  renderAll();
+  return true;
 }
 
 function el(tag, attrs = {}, ...kids) {
@@ -58,17 +81,234 @@ function el(tag, attrs = {}, ...kids) {
   return e;
 }
 
-// ---------------- navigation ----------------
-document.querySelectorAll(".nav-item").forEach((b) => b.addEventListener("click", () => {
-  document.querySelectorAll(".nav-item").forEach((x) => x.classList.toggle("active", x === b));
-  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("hidden", v.id !== "view-" + b.dataset.view));
-}));
+// ---------------- zones ----------------
+// The pure parts (which zones exist, routing, previews) live in model.js.
+const M = LouverModel;
+const { sameZone, zoneKey, ringCss, barCss, clamp } = M;
+const visiblePorts = () => M.visiblePorts(cfg);
+const mbCfg = (index) => M.mbCfg(cfg, index);
+let mbZeroRuns = {};
+// The current selection stays listed even if its header stops spinning.
+const zones = () => M.zones(cfg, state, { zeroRuns: mbZeroRuns, keep: sel });
 
-// ---------------- fan speed ----------------
-// The selected card is a hub port (cfg.hub.groups[i]) or a motherboard header
-// (cfg.motherboard.headers entry, created on first selection, BIOS by default).
+function zoneName(z) {
+  if (z.kind === "hub") return cfg.hub.groups[z.i].name;
+  if (z.kind === "mb") return mbCfg(z.i)?.name || `Header ${z.i}`;
+  return "Strimer Plus";
+}
+function zoneState(z) {
+  if (z.kind === "hub") return state?.hub.groups[z.i];
+  if (z.kind === "mb") return state?.motherboard.headers.find((h) => h.index === z.i);
+  return state?.strimer;
+}
+
+// Keep the selection on a zone that still exists (a port set to 0 fans, a
+// Strimer that was unplugged, a hash naming something that isn't there).
+// Any header the board reports counts, even an idle one, so a hash like #mb-1
+// can open a fan-stop header to set it up. sel is null only when there are no
+// zones at all.
+function ensureValidSelection() {
+  sel = M.validSelection(sel, zones());
+  const vis = visiblePorts().map(([, i]) => i);
+  if (!vis.includes(lab.group) && vis.length) lab.group = vis[0];
+}
+const onZone = () => view === "zone" && sel !== null;
+
+function applyRoute(r) {
+  if (!r) return;
+  view = r.view;
+  if (r.sel) sel = r.sel;
+}
+// The address always names what's on screen, even after the selection moved
+// on its own (a zone went away, or the hash named one that doesn't exist).
+function syncHash() {
+  const h = M.hashFor(view, sel) || "";
+  if (location.hash !== h) history.replaceState(null, "", h || location.pathname);
+}
+function go(r) {
+  applyRoute(r);
+  renderAll();
+}
+window.addEventListener("hashchange", () => { applyRoute(M.parseHash(location.hash)); renderAll(); });
+
+// ---- what a zone's lighting looks like, for the sidebar and the fan row ----
+// A fan glyph is a square frame (outer ring) around a round hub (inner ring).
+function setFanGlyph(g, p) {
+  g.style.setProperty("--outer", p === "mb" ? "var(--line)" : ringCss(p && p.outer));
+  g.style.setProperty("--inner", p === "mb" ? "var(--line)" : ringCss(p && p.inner));
+}
+function fanGlyph(p, big = false) {
+  const g = el("span", { class: "fan-glyph" + (big ? " big" : "") }, el("i"));
+  setFanGlyph(g, p);
+  return g;
+}
+const strimerPorts = () => M.strimerPreview(cfg, meta, state?.strimer.ports || 12);
+// The sidebar's one bar: each port's first colour, or the whole look if all
+// ports match.
+function strimerBar() {
+  const all = strimerPorts();
+  if (all === null) return MB_BAR;
+  const same = all.every((c) => c.join() === all[0].join());
+  return barCss(same ? all[0] : all.map((c) => c[0]));
+}
+const MB_BAR = barCss(null);
+// What a zone's sidebar glyph shows: a hub port's first fan, a plain fan for a
+// motherboard header, the Strimer's bar.
+function zonePreview(z) {
+  if (z.kind === "hub") return M.hubFanPreview(cfg, meta, z.i, 0);
+  if (z.kind === "mb") return "mb";
+  return strimerBar();
+}
+
+// ---------------- sidebar ----------------
+// The buttons are updated in place, keyed by zone, so the 1 s refresh can't
+// swallow a click that lands mid-rebuild or drop keyboard focus.
+function zoneButton(z) {
+  const glyph = z.kind === "strimer" ? el("span", { class: "strimer-glyph" }) : fanGlyph(null);
+  return el("button", { class: "zone", "data-zone": zoneKey(z) },
+    glyph, el("span", { class: "zname" }, el("b"), el("small")), el("i", { class: "zwarn hidden" }));
+}
+function fillZoneButton(b, z) {
+  const s = zoneState(z);
+  let sub;
+  if (z.kind === "strimer") sub = `${s.ports} ports`;
+  else {
+    const c = z.kind === "hub" ? cfg.hub.groups[z.i] : mbCfg(z.i) || { mode: "bios" };
+    sub = `${s?.rpm ?? 0} rpm` + (c.mode === "bios" ? " · BIOS" : c.mode === "mb_sync" ? " · MB" : "");
+  }
+  const [glyph, label, warnEl] = b.children;
+  if (z.kind === "strimer") glyph.style.background = zonePreview(z);
+  else setFanGlyph(glyph, zonePreview(z));
+  label.children[0].textContent = zoneName(z);
+  label.children[1].textContent = sub;
+  const warn = s?.failsafe ? ["bad", "No temperature: running at 100%"]
+    : s?.missing?.length ? ["warn", "Unreadable: " + s.missing.join(", ")] : null;
+  warnEl.className = "zwarn" + (warn ? " " + warn[0] : " hidden");
+  if (warn) { warnEl.title = warn[1]; warnEl.setAttribute("aria-label", warn[1]); }
+  b.classList.toggle("active", onZone() && sameZone(z, sel));
+}
+function renderZoneList() {
+  const box = $("zones"), zs = zones();
+  const keys = zs.map(zoneKey);
+  if (keys.join() !== [...box.children].map((b) => b.dataset.zone).join()) {
+    const have = new Map([...box.children].map((b) => [b.dataset.zone, b]));
+    box.replaceChildren(...zs.map((z) => have.get(zoneKey(z)) || zoneButton(z)));
+  }
+  zs.forEach((z, n) => fillZoneButton(box.children[n], z));
+  $("nav-settings").classList.toggle("active", view === "settings");
+}
+$("zones").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-zone]");
+  if (b) go(M.parseHash(b.dataset.zone));
+});
+
+function renderThemes() {
+  $("themes").replaceChildren(...meta.themes.map((t) => {
+    const b = el("button", {
+      class: "tdot" + (cfg.theme === t.name ? " on" : ""), title: t.name, "aria-label": "Theme: " + t.name,
+      onclick: async () => {
+        try { cfg = await api("/api/theme", { name: t.name }); renderAll(); }
+        catch (e) { toast("Theme failed: " + e.message); }
+      },
+    });
+    b.style.background = `linear-gradient(135deg, ${t.swatch.join(", ")})`;
+    return b;
+  }));
+  $("theme-name").textContent = cfg.theme || "";
+}
+
+function renderStatus() {
+  const h = state.hub, s = state.strimer, m = state.motherboard;
+  const row = (on, name, detail) => el("div", { class: "dev" }, el("span", { class: "dot" + (on ? " on" : "") }), el("span", {}, name), el("small", {}, detail));
+  $("devices").replaceChildren(
+    row(h.connected, "UNI HUB AL V2", h.connected ? h.firmware : "not connected"),
+    row(s.connected, "Strimer Plus", s.connected ? s.firmware : "not connected"),
+    ...(m?.present ? [row(m.writable && !m.error, "Motherboard", m.chip)] : []));
+  const b = $("banner");
+  const msg = state.error || (!h.connected ? "UNI HUB not connected — check the USB cable and the udev rule (see README)." : "")
+    || (onZone() && sel.kind === "mb" ? m?.error || (m && !m.writable ? "Read-only: install the hwmon udev rule (README) to control motherboard headers." : "") : "");
+  b.textContent = msg;
+  b.classList.toggle("hidden", !msg);
+}
+
+function renderView() {
+  $("view-zone").classList.toggle("hidden", !onZone());
+  $("view-empty").classList.toggle("hidden", view !== "zone" || sel !== null);
+  $("view-settings").classList.toggle("hidden", view !== "settings");
+}
+
+// ---------------- zone page ----------------
+function renderZoneHead() {
+  const z = sel, name = $("zone-name");
+  name.value = zoneName(z);
+  name.disabled = z.kind === "strimer";
+  if (z.kind === "hub") {
+    const n = cfg.hub.groups[z.i].fans;
+    $("zone-sub").textContent = `${n} fan${n === 1 ? "" : "s"} · hub port ${z.i + 1}`;
+  } else if (z.kind === "mb") {
+    $("zone-sub").textContent = `motherboard header ${z.i}` + (state?.motherboard.chip ? ` · ${state.motherboard.chip}` : "");
+  } else {
+    $("zone-sub").textContent = `${state?.strimer.ports ?? 12} ports · firmware ${state?.strimer.firmware || "?"}`;
+  }
+  renderZoneStats();
+}
+
+function renderZoneStats() {
+  const box = $("zone-stats");
+  if (sel.kind === "strimer") { box.replaceChildren(); return; }
+  const s = zoneState(sel) || {};
+  const c = selCfg();
+  const sensor = meta.sensors.find((x) => x.id === c.sensor);
+  const stat = (big, small) => el("div", { class: "stat" }, el("b", {}, big), el("small", {}, small));
+  // BIOS and MB PWM sync ignore Louver's sensor, so don't show one.
+  const ownSensor = c.mode !== "bios" && c.mode !== "mb_sync";
+  box.replaceChildren(
+    stat(String(s.rpm ?? 0), "rpm"),
+    stat(s.percent == null ? (c.mode === "bios" ? "BIOS" : "MB") : s.percent + "%", "duty"),
+    ...(ownSensor ? [stat(s.temp == null ? "—" : s.temp.toFixed(0) + "°", sensor ? sensor.label : c.sensor)] : []),
+    ...(s.failsafe ? [el("span", { class: "fs" }, "No temperature: running at 100%")]
+      : s.missing?.length ? [el("span", { class: "fs warn" }, "Unreadable: " + s.missing.join(", "))] : []),
+  );
+}
+
+function renderZoneFans() {
+  const box = $("zone-fans");
+  if (sel.kind === "hub") {
+    const n = cfg.hub.groups[sel.i].fans;
+    box.replaceChildren(...Array.from({ length: n }, (_, f) => fanGlyph(M.hubFanPreview(cfg, meta, sel.i, f), true)));
+  } else if (sel.kind === "strimer") {
+    const ports = strimerPorts();
+    box.replaceChildren(...Array.from({ length: state?.strimer.ports || 12 }, (_, k) => {
+      const b = el("span", { class: "strimer-glyph big" });
+      b.style.background = ports === null ? MB_BAR : barCss(ports[k]);
+      return b;
+    }));
+  } else box.replaceChildren();
+  box.classList.toggle("hidden", !box.childElementCount);
+}
+
+function renderZone() {
+  renderZoneHead();
+  renderZoneFans();
+  const hasSpeed = sel.kind !== "strimer", hasLight = sel.kind !== "mb";
+  $("speed-panel").classList.toggle("hidden", !hasSpeed);
+  $("light-panel").classList.toggle("hidden", !hasLight);
+  if (hasSpeed) renderSpeed();
+  if (hasLight) renderLighting();
+}
+
+$("zone-name").addEventListener("change", (e) => {
+  if (!sel || sel.kind === "strimer") return;
+  selCfg().name = e.target.value || (sel.kind === "hub" ? `Port ${sel.i + 1}` : `Header ${sel.i}`);
+  save(0); renderZoneList();
+});
+$("nav-settings").addEventListener("click", () => go({ view: "settings" }));
+
+// ---------------- speed ----------------
+// A hub port (cfg.hub.groups[i]) or a motherboard header (cfg.motherboard.headers
+// entry, created on first edit, BIOS by default).
 function mbEntry(index) {
-  let h = cfg.motherboard.headers.find((x) => x.index === index);
+  let h = mbCfg(index);
   if (!h) {
     h = { index, name: `Header ${index}`, mode: "bios", manual_percent: 50, sensor: "cpu", curve: meta.presets.standard.map((p) => [...p]) };
     cfg.motherboard.headers.push(h);
@@ -76,63 +316,14 @@ function mbEntry(index) {
   return h;
 }
 const selCfg = () => (sel.kind === "hub" ? cfg.hub.groups[sel.i] : mbEntry(sel.i));
-const selState = () => (sel.kind === "hub" ? state?.hub.groups[sel.i] : state?.motherboard.headers.find((h) => h.index === sel.i));
+const selState = () => zoneState(sel);
+const hasSpeed = () => onZone() && sel.kind !== "strimer";
 
-// Hub ports with 0 fans are hidden unless Settings says otherwise.
-const visiblePorts = () => cfg.hub.groups.map((g, i) => [g, i]).filter(([g]) => g.fans > 0 || cfg.ui.show_empty_ports);
-function ensureVisibleSelection() {
-  const vis = visiblePorts().map(([, i]) => i);
-  if (sel.kind === "hub" && !vis.includes(sel.i) && vis.length) sel = { kind: "hub", i: vis[0] };
-  if (lightPort !== 4 && !vis.includes(lightPort) && vis.length) lightPort = vis[0];
-  if (!vis.includes(lab.group) && vis.length) lab.group = vis[0];
-}
-
-function portCard(g, s, selected, onclick, sub) {
-  const pct = s.percent;
-  const card = el("button", { class: "port" + (selected ? " sel" : ""), onclick },
-    el("div", { class: "pname" }, g.name),
-    el("div", { class: "pmode" }, MODE_LABELS[g.mode] + sub),
-    el("div", { class: "rpm" }, String(s.rpm ?? 0), el("small", {}, " RPM")),
-    el("div", { class: "meta" },
-      el("span", {}, pct == null ? (g.mode === "bios" ? "BIOS" : "MB") : pct + "%"),
-      el("span", {}, s.temp == null ? "—" : s.temp.toFixed(1) + " °C")),
-    el("div", { class: "bar" }, el("i")),
-    ...(s.failsafe ? [el("span", { class: "fs" }, "NO TEMP")]
-      : s.missing?.length ? [el("span", { class: "fs warn", title: "Unreadable: " + s.missing.join(", ") }, s.missing.join("+").toUpperCase() + " MISSING")] : []),
-  );
-  card.querySelector(".bar i").style.width = (pct ?? 0) + "%";
-  return card;
-}
-
-function renderMbPorts() {
-  const m = state?.motherboard;
-  $("mb-section").classList.toggle("hidden", !m?.present);
-  if (!m?.present) return;
-  $("mb-chip").textContent = m.chip;
-  const warn = m.error || (!m.writable ? "Read-only: install the hwmon udev rule (README) to control these headers." : "");
-  $("mb-banner").textContent = warn;
-  $("mb-banner").classList.toggle("hidden", !warn);
-  const shown = m.headers.filter((h) => (h.rpm ?? 0) > 0 || cfg.motherboard.headers.some((c) => c.index === h.index && c.mode !== "bios"));
-  $("mb-ports").replaceChildren(...shown.map((h) => {
-    const c = cfg.motherboard.headers.find((x) => x.index === h.index) || { name: `Header ${h.index}`, mode: "bios" };
-    return portCard(c, h, sel.kind === "mb" && sel.i === h.index, () => { sel = { kind: "mb", i: h.index }; renderFans(); }, ` · header ${h.index}`);
-  }));
-}
-
-function renderPorts() {
-  const box = $("ports");
-  box.replaceChildren(...visiblePorts().map(([g, i]) => portCard(g, state?.hub.groups[i] || {}, sel.kind === "hub" && sel.i === i,
-    () => { sel = { kind: "hub", i }; renderFans(); }, " · " + g.fans + " fan" + (g.fans === 1 ? "" : "s"))));
-  renderMbPorts();
-}
-
-function renderFans() {
-  ensureVisibleSelection();
-  renderPorts();
+function renderSpeed() {
   const g = selCfg();
   const isMb = sel.kind === "mb";
-  $("port-name").value = g.name;
   $("port-fans-label").classList.toggle("hidden", isMb);
+  $("port-sensor-label").classList.toggle("hidden", g.mode === "bios" || g.mode === "mb_sync");
   $("mb-hint").classList.toggle("hidden", !isMb);
   // No bulk apply for motherboard headers: one of them may be a pump.
   $("apply-all").classList.toggle("hidden", isMb);
@@ -147,13 +338,12 @@ function renderFans() {
   if (!fans.options.length) for (let n = 0; n <= 6; n++) fans.append(el("option", { value: n }, String(n)));
   fans.value = g.fans;
 
-  const chips = $("mode-chips");
-  chips.replaceChildren(...(isMb ? meta.mb_fan_modes : meta.fan_modes).map((m) => el("button", {
+  $("mode-chips").replaceChildren(...(isMb ? meta.mb_fan_modes : meta.fan_modes).map((m) => el("button", {
     class: "chip" + (m === g.mode ? " on" : ""),
     onclick: () => {
       const cur = selCfg();
       if (m === "curve" && cur.mode in meta.presets) cur.curve = meta.presets[cur.mode].map((p) => [...p]);
-      cur.mode = m; save(0); renderFans();
+      cur.mode = m; save(0); renderSpeed(); renderZoneStats(); renderZoneList();
     },
   }, MODE_LABELS[m])));
 
@@ -167,11 +357,8 @@ function renderFans() {
   drawCurve();
 }
 
-$("port-name").addEventListener("change", (e) => {
-  selCfg().name = e.target.value || (sel.kind === "hub" ? `Port ${sel.i + 1}` : `Header ${sel.i}`); save(0); renderPorts();
-});
-$("port-sensor").addEventListener("change", (e) => { selCfg().sensor = e.target.value; save(0); });
-$("port-fans").addEventListener("change", (e) => { selCfg().fans = +e.target.value; save(0); renderPorts(); });
+$("port-sensor").addEventListener("change", (e) => { selCfg().sensor = e.target.value; save(0); renderZoneStats(); });
+$("port-fans").addEventListener("change", (e) => { selCfg().fans = +e.target.value; save(0); renderAll(); });
 $("manual-range").addEventListener("input", (e) => {
   selCfg().manual_percent = +e.target.value;
   $("manual-val").textContent = e.target.value + "%";
@@ -184,7 +371,7 @@ $("apply-all").addEventListener("click", () => {
     if (g === src) continue;
     Object.assign(g, { mode: src.mode, manual_percent: src.manual_percent, sensor: src.sensor, curve: src.curve.map((p) => [...p]) });
   }
-  save(0); renderFans();
+  save(0); renderAll();
 });
 
 // ---- curve editor ----
@@ -193,7 +380,6 @@ const tx = (t) => PAD.l + (t - T_MIN) / (T_MAX - T_MIN) * (W - PAD.l - PAD.r);
 const ty = (p) => H - PAD.b - p / 100 * (H - PAD.t - PAD.b);
 const fx = (x) => T_MIN + (x - PAD.l) / (W - PAD.l - PAD.r) * (T_MAX - T_MIN);
 const fy = (y) => (H - PAD.b - y) / (H - PAD.t - PAD.b) * 100;
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const NS = "http://www.w3.org/2000/svg";
 const sv = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
 
@@ -273,25 +459,12 @@ $("curve").addEventListener("dblclick", (e) => {
   save(0); drawCurve();
 });
 
-// ---------------- lighting ----------------
+
+// ---------------- lighting editors ----------------
 const HUB_INNER = 8, HUB_OUTER = 12, HUB_FANS = 6, STRIMER_LEDS = 27;
 const BRIGHT_LABELS = { "-1": "Off", 0: "Lowest", 1: "Low", 2: "Normal", 3: "High", 4: "Highest" };
 const SPEED_LABELS = ["Slowest", "Slow", "Normal", "Fast", "Fastest"];
 let brush = "#ff00c8", paintTool = "led", painting = false, strimerPort = 0;
-
-function renderThemes(box) {
-  box.replaceChildren(...meta.themes.map((t) => {
-    const sw = el("div", { class: "swatch" });
-    sw.style.background = `linear-gradient(90deg, ${t.swatch.join(", ")})`;
-    return el("button", {
-      class: "theme" + (cfg.theme === t.name ? " on" : ""),
-      onclick: async () => {
-        try { cfg = await api("/api/theme", { name: t.name }); renderAll(); }
-        catch (e) { toast("Theme failed: " + e.message); }
-      },
-    }, sw, el("span", {}, t.name));
-  }));
-}
 
 function slider(min, max, value, labels, onchange) {
   const out = el("b", {}, labels[value] ?? String(value));
@@ -450,62 +623,70 @@ function painter(kind, ctx) {
 }
 window.addEventListener("pointerup", () => { painting = false; });
 
+function toggle(label, checked, onchange) {
+  const inp = el("input", { type: "checkbox" });
+  inp.checked = checked;
+  inp.addEventListener("change", () => onchange(inp.checked));
+  return el("label", { class: "toggle" }, inp, el("span"), label);
+}
+
 function editLight({ rerender = true, delay = 0 } = {}) {
   cfg.theme = null;
   save(delay);
-  if (rerender) { renderHubLighting(); renderStrimer(); }
+  if (rerender) { renderLighting(); renderZoneFans(); renderZoneList(); renderThemes(); }
 }
 
-function renderHubLighting() {
-  renderThemes($("hub-themes"));
-  ensureVisibleSelection();
-  $("light-ports").replaceChildren(...[...visiblePorts().map(([g, i]) => [g.name, i]), ["All ports", 4]].map(([name, i]) =>
-    el("button", { class: i === lightPort ? "on" : "", onclick: () => { lightPort = i; renderHubLighting(); } }, name)));
-  $("hub-mbsync").checked = cfg.hub.mb_rgb_sync;
-  const box = $("hub-light-controls");
-  box.classList.toggle("hidden", cfg.hub.mb_rgb_sync);
-  const idx = lightPort === 4 ? 0 : lightPort;
-  box.replaceChildren(lightingEditor("hub", {
-    entry: cfg.hub.lighting[idx],
-    fans: lightPort === 4 ? Math.max(...cfg.hub.groups.map((g) => g.fans)) : cfg.hub.groups[idx].fans,
-    // Look the entry up at edit time: cfg may have been replaced by a save.
-    set: (patch, opts) => {
-      const targets = lightPort === 4 ? [0, 1, 2, 3] : [idx];
-      const merged = { ...cfg.hub.lighting[idx], ...patch };
-      for (const i of targets) cfg.hub.lighting[i] = JSON.parse(JSON.stringify(merged));
-      editLight(opts);
-    },
-  }));
-}
-$("hub-mbsync").addEventListener("change", (e) => { cfg.hub.mb_rgb_sync = e.target.checked; cfg.theme = null; save(0); renderHubLighting(); });
-
-function renderStrimer() {
-  renderThemes($("strimer-themes"));
+// ---------------- lighting ----------------
+function renderLighting() {
+  const tools = $("light-tools"), box = $("light-controls"), hint = $("mbsync-hint");
+  if (sel.kind === "hub") {
+    const i = sel.i, synced = cfg.hub.mb_rgb_sync;
+    tools.replaceChildren(
+      toggle("Follow motherboard ARGB (all hub ports)", synced, (v) => { cfg.hub.mb_rgb_sync = v; editLight(); }),
+      ...(synced ? [] : [el("button", { class: "btn ghost", onclick: () => {
+        for (let k = 0; k < cfg.hub.lighting.length; k++) if (k !== i) cfg.hub.lighting[k] = JSON.parse(JSON.stringify(cfg.hub.lighting[i]));
+        editLight();
+      } }, "Use this look on every hub port")]));
+    hint.textContent = "The motherboard's ARGB header is driving every hub port's lighting. Turn that off to set it here.";
+    hint.classList.toggle("hidden", !synced);
+    box.classList.toggle("hidden", synced);
+    if (synced) { box.replaceChildren(); return; }
+    box.replaceChildren(lightingEditor("hub", {
+      entry: cfg.hub.lighting[i],
+      fans: cfg.hub.groups[i].fans,
+      // Look the entry up at edit time: cfg may have been replaced by a save.
+      set: (patch, opts) => { cfg.hub.lighting[i] = { ...cfg.hub.lighting[i], ...patch }; editLight(opts); },
+    }));
+    return;
+  }
+  // Strimer
   const s = cfg.strimer, ports = state?.strimer.ports || 12;
-  $("strimer-mbsync").checked = s.mb_rgb_sync;
-  $("strimer-perport").checked = s.per_port;
-  $("strimer-ports").classList.toggle("hidden", !s.per_port);
-  $("strimer-ports").replaceChildren(...Array.from({ length: ports }, (_, i) =>
-    el("button", { class: i === strimerPort ? "on" : "", onclick: () => { strimerPort = i; renderStrimer(); } }, String(i + 1))));
-  const box = $("strimer-light-controls");
-  box.classList.toggle("hidden", s.mb_rgb_sync);
-  box.replaceChildren(lightingEditor("strimer", {
-    entry: s.per_port ? s.ports[strimerPort] : s.lighting,
-    set: (patch, opts) => {
+  if (strimerPort >= ports) strimerPort = 0;
+  tools.replaceChildren(
+    toggle("Follow motherboard ARGB", s.mb_rgb_sync, (v) => { cfg.strimer.mb_rgb_sync = v; editLight(); }),
+    ...(s.mb_rgb_sync ? [] : [toggle("Per-port control", s.per_port, (v) => {
       const st = cfg.strimer;
-      if (st.per_port) st.ports[strimerPort] = { ...st.ports[strimerPort], ...patch };
-      else st.lighting = { ...st.lighting, ...patch };
-      editLight(opts);
-    },
-  }));
+      st.per_port = v;
+      if (v) st.ports = st.ports.map(() => JSON.parse(JSON.stringify(st.lighting)));  // start from the current look
+      editLight();
+    })]));
+  hint.textContent = "The motherboard's ARGB header is driving the Strimer. Turn that off to set it here.";
+  hint.classList.toggle("hidden", !s.mb_rgb_sync);
+  box.classList.toggle("hidden", s.mb_rgb_sync);
+  if (s.mb_rgb_sync) { box.replaceChildren(); return; }
+  box.replaceChildren(
+    ...(s.per_port ? [field("Port", seg(Array.from({ length: ports }, (_, k) => [k, String(k + 1)]), strimerPort,
+      (v) => { strimerPort = v; renderLighting(); }))] : []),
+    lightingEditor("strimer", {
+      entry: s.per_port ? s.ports[strimerPort] : s.lighting,
+      set: (patch, opts) => {
+        const st = cfg.strimer;
+        if (st.per_port) st.ports[strimerPort] = { ...st.ports[strimerPort], ...patch };
+        else st.lighting = { ...st.lighting, ...patch };
+        editLight(opts);
+      },
+    }));
 }
-$("strimer-mbsync").addEventListener("change", (e) => { cfg.strimer.mb_rgb_sync = e.target.checked; cfg.theme = null; save(0); renderStrimer(); });
-$("strimer-perport").addEventListener("change", (e) => {
-  const s = cfg.strimer;
-  s.per_port = e.target.checked;
-  if (s.per_port) s.ports = s.ports.map(() => JSON.parse(JSON.stringify(s.lighting)));  // start from the current look
-  cfg.theme = null; save(0); renderStrimer();
-});
 
 // ---------------- settings ----------------
 function renderSettings() {
@@ -527,38 +708,36 @@ $("set-exit").addEventListener("change", (e) => { cfg.on_exit = e.target.value; 
 $("set-exit-pct").addEventListener("change", (e) => { cfg.on_exit_percent = +e.target.value; save(0); });
 
 // ---------------- live state ----------------
-function renderStatus() {
-  const h = state.hub, s = state.strimer;
-  $("hub-dot").classList.toggle("on", h.connected);
-  $("strimer-dot").classList.toggle("on", s.connected);
-  $("fw").textContent = [h.connected && `Hub firmware ${h.firmware}`, s.connected && `Strimer firmware ${s.firmware}`].filter(Boolean).join("\n");
-  const b = $("banner");
-  const msg = state.error || (!h.connected ? "UNI HUB not connected — check the USB cable and the udev rule (see README)." : "");
-  b.textContent = msg;
-  b.classList.toggle("hidden", !msg);
+function renderAll() {
+  ensureValidSelection();
+  syncHash();
+  renderView();
+  renderZoneList();
+  renderThemes();
+  renderStatus();
+  if (onZone()) renderZone();
+  renderSettings();
+  renderLab();
 }
-
-function renderAll() { renderFans(); renderHubLighting(); renderStrimer(); renderSettings(); renderLab(); }
 
 async function poll() {
   try {
     state = await api("/api/state");
-    renderStatus();
-    renderPorts();
-    if (!dragging) drawCurve();
   } catch (e) {
     $("banner").textContent = "Louver daemon not reachable.";
     $("banner").classList.remove("hidden");
+    return;
   }
-}
-
-(async function init() {
-  [cfg, meta, state] = await Promise.all([api("/api/config"), api("/api/meta"), api("/api/state")]);
-  renderAll();
+  mbZeroRuns = M.nextZeroRuns(mbZeroRuns, state);
+  try { if (await adoptOutsideChanges()) return; } catch (e) { /* daemon hiccup: try again next poll */ }
+  const before = sel && zoneKey(sel);
+  ensureValidSelection();
+  if ((sel && zoneKey(sel)) !== before) { renderAll(); return; }  // the selected zone went away (or one appeared)
   renderStatus();
-  setInterval(poll, 1000);
-  setInterval(async () => { meta.sensors = (await api("/api/meta")).sensors; }, 15000);
-})();
+  renderZoneList();
+  if (onZone()) { renderZoneStats(); renderZoneFans(); }
+  if (hasSpeed() && !dragging) drawCurve();
+}
 
 // ---------------- lighting lab ----------------
 const lab = { group: 2, ring: "inner", mode: 1, speed: 2, palette: "rainbow" };
@@ -575,7 +754,6 @@ async function labSend() {
 }
 
 function renderLab() {
-  ensureVisibleSelection();
   const p = $("lab-panel");
   const num = el("input", { type: "number", min: 0, max: 255, value: lab.mode });
   num.addEventListener("change", () => { lab.mode = clamp(+num.value || 0, 0, 255); labSend(); renderLab(); });
@@ -614,3 +792,12 @@ function renderLab() {
   $("lab-map").replaceChildren(el("table", { class: "map-table" },
     el("tr", {}, el("th", {}, "Effect"), el("th", {}, "Inner ring"), el("th", {}, "Outer ring")), ...rows));
 }
+
+(async function init() {
+  [cfg, meta, state] = await Promise.all([api("/api/config"), api("/api/meta"), api("/api/state")]);
+  mbZeroRuns = M.nextZeroRuns({}, state);
+  applyRoute(M.parseHash(location.hash));
+  go({ view });
+  setInterval(poll, 1000);
+  setInterval(async () => { meta.sensors = (await api("/api/meta")).sensors; }, 15000);
+})();

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -31,6 +32,7 @@ try:
 except (ValueError, ImportError):
     AppIndicator = None
 
+from . import tray  # noqa: E402
 from .gui_ids import APP_ID, TRAY_ICON  # noqa: E402
 
 ICON_DIR = Path(__file__).resolve().parent.parent / "packaging" / "icons" / "hicolor"  # running from a checkout
@@ -42,7 +44,13 @@ class LouverApp(Gtk.Application):
         self.base = base_url.rstrip("/")
         self.window: Gtk.Window | None = None
         self.indicator = None
+        self.menu: Gtk.Menu | None = None
+        self.menu_sig: tuple | None = None
         self.status_item: Gtk.MenuItem | None = None
+        self.zone_items: dict[str, Gtk.MenuItem] = {}
+        self.themes: list[str] = []
+        self.sensor_labels: dict[str, str] = {}
+        self._meta_at = -1e9
         self.app_cfg = {"close_to_tray": True, "start_minimized": True}
         self._first = True
 
@@ -94,13 +102,19 @@ class LouverApp(Gtk.Application):
         return 0
 
     def show_window(self, *_):
+        self.open_at("")
+
+    def open_at(self, hash_: str) -> None:
+        """Show the window; hash_ ("#hub-2", or "" for wherever it was) picks the page."""
         if self.window is None:
-            self.window = self.build_window()
+            self.window = self.build_window(hash_)
+        elif hash_:
+            self.view.load_uri(self.base + "/" + hash_)  # same page, new #hash: no reload
         self.window.show_all()
         self.window.present()
         self._sync_tray_visibility()
 
-    def build_window(self) -> Gtk.Window:
+    def build_window(self, hash_: str = "") -> Gtk.Window:
         win = Gtk.ApplicationWindow(application=self, title="Louver")
         win.set_default_size(1180, 820)
         win.set_icon_name(APP_ID)
@@ -114,7 +128,7 @@ class LouverApp(Gtk.Application):
         settings.set_enable_back_forward_navigation_gestures(False)
         view.connect("decide-policy", self._keep_local)
         view.connect("load-failed", self._load_failed)
-        view.load_uri(self.base + "/")
+        view.load_uri(self.base + "/" + hash_)
         win.add(view)
         win.connect("delete-event", self.on_close)
         self.view = view
@@ -144,11 +158,15 @@ class LouverApp(Gtk.Application):
         if self.tray_on and self.app_cfg.get("close_to_tray", True):
             win.hide()
             self._sync_tray_visibility()
+            self.update_status()  # the menu wasn't kept current while the window was up
             return True  # keep the window (and its page state) for next time
         self.quit()
         return False
 
     # --- tray ---------------------------------------------------------------
+    # The menu: Open Louver, a status line, one submenu per zone with the quick
+    # speeds, Themes, Quit. It's rebuilt only when its shape or a radio mark
+    # changes (tray.signature); live rpm and temperatures are relabelled in place.
     def build_tray(self) -> None:
         if AppIndicator is None:
             return
@@ -156,67 +174,122 @@ class LouverApp(Gtk.Application):
         if not Gtk.IconTheme.get_default().has_icon(TRAY_ICON):
             ind.set_icon_theme_path(str(ICON_DIR / "symbolic" / "apps"))
         ind.set_title("Louver")
+        self.indicator = ind
+        self.update_status()
+        self.refresh_settings()
+
+    @staticmethod
+    def _radio(label: str, active: bool) -> Gtk.CheckMenuItem:
+        # A check item drawn as a radio, not a RadioMenuItem: a radio group
+        # can't show "none of these" (a custom theme, a custom curve).
+        item = Gtk.CheckMenuItem(label=label)
+        item.set_draw_as_radio(True)
+        item.set_active(active)  # before connecting: set_active fires "activate"
+        return item
+
+    def build_menu(self, cfg: dict | None, state: dict | None) -> None:
         menu = Gtk.Menu()
         open_item = Gtk.MenuItem(label="Open Louver")
         open_item.connect("activate", self.show_window)
         menu.append(open_item)
-        self.status_item = Gtk.MenuItem(label="Connecting…")
+        self.status_item = Gtk.MenuItem(label=tray.status_line(cfg, state, self.sensor_labels))
         self.status_item.set_sensitive(False)
         menu.append(self.status_item)
         menu.append(Gtk.SeparatorMenuItem())
+
+        self.zone_items = {}
+        zones = tray.zones(cfg, state) if cfg is not None and state is not None else []
+        for z in zones:
+            sub = Gtk.Menu()
+            for mode, label in tray.SPEEDS:
+                item = self._radio(label, z.mode == mode)
+                item.connect("activate", self.set_zone_mode, z.key, mode)
+                sub.append(item)
+            if z.mode not in dict(tray.SPEEDS):  # set in the window: show it, but it's not a tray choice
+                item = self._radio(tray.mode_label(z), True)
+                item.set_sensitive(False)
+                sub.append(item)
+            sub.append(Gtk.SeparatorMenuItem())
+            edit = Gtk.MenuItem(label="Open in Louver…")
+            edit.connect("activate", lambda _i, key=z.key: self.open_at("#" + key))
+            sub.append(edit)
+            item = Gtk.MenuItem(label=tray.zone_label(z))
+            item.set_submenu(sub)
+            menu.append(item)
+            self.zone_items[z.key] = item
+        if zones:
+            menu.append(Gtk.SeparatorMenuItem())
+
         themes_item = Gtk.MenuItem(label="Themes")
         themes_menu = Gtk.Menu()
-        try:
-            names = [t["name"] for t in self.api("/api/meta")["themes"]]
-        except (urllib.error.URLError, OSError, ValueError, KeyError):
-            names = []
-        for name in names:
-            item = Gtk.MenuItem(label=name)
+        current = cfg.get("theme") if cfg is not None else None
+        for name in self.themes:
+            item = self._radio(name, name == current)
             item.connect("activate", self.apply_theme, name)
             themes_menu.append(item)
         themes_item.set_submenu(themes_menu)
-        themes_item.set_sensitive(bool(names))
+        themes_item.set_sensitive(bool(self.themes) and cfg is not None)
         menu.append(themes_item)
         menu.append(Gtk.SeparatorMenuItem())
         quit_item = Gtk.MenuItem(label="Quit (fan control keeps running)")
         quit_item.connect("activate", lambda *_: self.quit())
         menu.append(quit_item)
         menu.show_all()
-        ind.set_menu(menu)
-        ind.set_secondary_activate_target(open_item)  # middle-click opens
-        self.indicator = ind
-        self.refresh_settings()
+        self.indicator.set_menu(menu)
+        self.indicator.set_secondary_activate_target(open_item)  # middle-click opens
+        self.menu = menu
+
+    def _put(self, path: str, body: dict) -> None:
+        try:
+            self.api(path, body)
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            print(f"{path} failed: {e}", file=sys.stderr)
+        # Rebuild either way: a click un-ticks a check item before we get
+        # here, and a failed change must show the old choice again.
+        self.menu_sig = None
+        self.update_status()
+
+    def set_zone_mode(self, _item, zone: str, mode: str) -> None:
+        self._put("/api/zone-mode", {"zone": zone, "mode": mode})
 
     def apply_theme(self, _item, name: str) -> None:
-        try:
-            self.api("/api/theme", {"name": name})
-        except (urllib.error.URLError, OSError) as e:
-            print(f"theme failed: {e}", file=sys.stderr)
+        # The window (open or hidden) notices the new config revision itself.
+        self._put("/api/theme", {"name": name})
+
+    def _refresh_meta(self) -> None:
+        """Theme names and sensor labels change rarely; /api/meta is costly
+        (it reads every sensor), so fetch it every 30 s at most."""
+        if self.themes and time.monotonic() - self._meta_at < 30:
             return
-        if self.window is not None and self.window.get_visible():
-            self.view.reload()
+        try:
+            meta = self.api("/api/meta")
+        except (urllib.error.URLError, OSError, ValueError):
+            return
+        self.themes = [t["name"] for t in meta.get("themes", [])]
+        self.sensor_labels = {s["id"]: s["label"] for s in meta.get("sensors", [])}
+        self._meta_at = time.monotonic()
 
     def update_status(self) -> bool:
-        if self.status_item is None:
+        """Every 2 s while the tray is showing (the window is hidden)."""
+        if self.indicator is None or (self.window is not None and self.window.get_visible()):
             return True
         try:
-            st = self.api("/api/state")
+            state = self.api("/api/state")
             cfg = self.api("/api/config")
         except (urllib.error.URLError, OSError, ValueError):
-            self.status_item.set_label("Service not running")
-            return True
-        self.app_cfg = cfg.get("app", self.app_cfg)
-        self._sync_tray_visibility()
-        temps = [g["temp"] for g in st["hub"]["groups"] if g.get("temp") is not None]
-        parts = [f"{max(temps):.0f}°C"] if temps else []
-        for g, gc in zip(st["hub"]["groups"], cfg["hub"]["groups"]):
-            if gc["fans"] > 0:
-                parts.append(f"{gc['name']} {g['rpm']} rpm")
-        if not st["hub"]["connected"]:
-            parts = ["Hub disconnected"]
-        self.status_item.set_label(" · ".join(parts) or "Louver")
+            state = cfg = None
+        if cfg is not None:
+            self.app_cfg = cfg.get("app", self.app_cfg)
+            self._refresh_meta()
+        sig = tray.signature(cfg, state, self.themes)
+        if sig != self.menu_sig:
+            self.build_menu(cfg, state)
+            self.menu_sig = sig
+        else:
+            self.status_item.set_label(tray.status_line(cfg, state, self.sensor_labels))
+            for z in tray.zones(cfg, state) if cfg is not None and state is not None else []:
+                self.zone_items[z.key].set_label(tray.zone_label(z))
         return True
-
 
 
 def run(base_url: str, argv: list[str]) -> int:

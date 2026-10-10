@@ -59,6 +59,9 @@ class Controller:
         mbfans: MotherboardFans | None = None,
     ):
         self.cfg = cfgmod.validate(cfg)
+        # Bumped on every config change, so a window that's been open a while
+        # (or hidden behind the tray) can tell its copy is out of date.
+        self.cfg_rev = 0
         self.mb = mbfans if mbfans is not None and mbfans.present else None
         self._mb_governors: dict[int, Governor] = {}
         self._mb_sent: dict[int, tuple[int, float]] = {}
@@ -324,11 +327,18 @@ class Controller:
                     self.mb_error = f"motherboard header {idx}: {e}"
 
     # --- config -------------------------------------------------------------
+    def update_config(self, change) -> dict:
+        """Apply ``change(current cfg) -> new cfg`` atomically: no other
+        change can land between reading the config and applying it."""
+        with self.lock:
+            return self.apply_config(change(self.cfg))
+
     def apply_config(self, new: dict) -> dict:
         new = cfgmod.validate(new)
         with self.lock:
             old = self.cfg
             self.cfg = new
+            self.cfg_rev += 1
             if self.cfg_path is not None:
                 cfgmod.save(new, self.cfg_path)
                 if old["app"]["start_on_login"] != new["app"]["start_on_login"]:
@@ -432,6 +442,7 @@ class Controller:
                     "error": self.mb_error,
                 },
                 "error": self.error,
+                "config_rev": self.cfg_rev,
             }
 
     def shutdown(self) -> None:
@@ -486,7 +497,8 @@ def meta(ctrl: Controller) -> dict:
     }
 
 
-_STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
+_STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/model.js": "model.js",
+           "/style.css": "style.css"}
 _CTYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css"}
 
 
@@ -536,7 +548,7 @@ def make_handler(ctrl: Controller, allowed_hosts: set[str]):
             # so other websites can't drive the fans through the browser.
             if self.headers.get("X-Louver") != "1":
                 return self._json(HTTPStatus.FORBIDDEN, {"error": "missing X-Louver header"})
-            if self.path not in ("/api/config", "/api/theme", "/api/lab"):
+            if self.path not in ("/api/config", "/api/theme", "/api/zone-mode", "/api/lab"):
                 return self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             try:
                 n = int(self.headers.get("Content-Length", "0"))
@@ -553,8 +565,12 @@ def make_handler(ctrl: Controller, allowed_hosts: set[str]):
                     name = body.get("name")
                     if name not in THEMES:
                         raise cfgmod.ConfigError(f"unknown theme {name!r}")
-                    body = apply_theme(ctrl.cfg, name)
-                new = ctrl.apply_config(body)
+                    new = ctrl.update_config(lambda cfg: apply_theme(cfg, name))
+                elif self.path == "/api/zone-mode":
+                    zone, mode = body.get("zone"), body.get("mode")
+                    new = ctrl.update_config(lambda cfg: cfgmod.set_zone_mode(cfg, zone, mode))
+                else:
+                    new = ctrl.apply_config(body)
             except (ValueError, cfgmod.ConfigError) as e:
                 return self._json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
             return self._json(200, new)

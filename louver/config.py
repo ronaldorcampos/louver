@@ -219,6 +219,33 @@ def validate(cfg: dict) -> dict:
     return cfg
 
 
+def set_zone_mode(cfg: dict, zone: str, mode: str) -> dict:
+    """Return a copy of ``cfg`` with one zone's speed mode changed (the tray's
+    quick control). ``zone`` is "hub-<0..3>" or "mb-<1..16>"; a header with no
+    entry yet gets one. Raises ConfigError on anything else."""
+    kind, _, num = str(zone).partition("-")
+    if not num.isdigit() or num != str(int(num)):
+        raise ConfigError(f"unknown zone {zone!r}")
+    n = int(num)
+    out = copy.deepcopy(cfg)
+    if kind == "hub" and 0 <= n <= 3:
+        if mode not in FAN_MODES:
+            raise ConfigError(f"mode must be one of {FAN_MODES}")
+        out["hub"]["groups"][n]["mode"] = mode
+    elif kind == "mb" and 1 <= n <= 16:
+        if mode not in MB_FAN_MODES:
+            raise ConfigError(f"mode must be one of {MB_FAN_MODES}")
+        headers = out["motherboard"]["headers"]
+        entry = next((h for h in headers if h.get("index") == n), None)
+        if entry is None:
+            headers.append({"index": n, "mode": mode})  # validate() fills the rest
+        else:
+            entry["mode"] = mode
+    else:
+        raise ConfigError(f"unknown zone {zone!r}")
+    return out
+
+
 def load(path: Path | None = None) -> dict:
     path = path or default_path()
     try:

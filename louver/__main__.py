@@ -66,10 +66,10 @@ def cmd_daemon(args, cfg: dict, path: Path) -> int:
         if lock is None:
             return ALREADY_RUNNING
     if args.demo:
-        from .sim import open_sim
+        from .sim import open_sim, sim_motherboard
 
         # Demo never touches real hardware or the real config file.
-        ctrl = Controller(cfg, None, SensorHub(), opener=open_sim)
+        ctrl = Controller(cfg, None, SensorHub(), opener=open_sim, mbfans=sim_motherboard())
     else:
         from .mbfans import MotherboardFans
 
