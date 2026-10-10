@@ -275,13 +275,35 @@ function speedFoot(kind, mode, s) {
   return now + `if the sensor drops out, this ${kind === "hub" ? "port" : "header"} runs at 100%`;
 }
 
+// Motherboard headers. A pump is only ever left on the BIOS's curve or run at
+// full speed (config.PUMP_MODES); ticking "pump" moves any other mode to BIOS.
+function speedModes(meta, kind, g) {
+  if (kind !== "mb") return meta.fan_modes;
+  return g.pump ? meta.pump_modes : meta.mb_fan_modes;
+}
+function pumpChange(g, on, pumpModes) {
+  return { pump: on, mode: on && !pumpModes.includes(g.mode) ? "bios" : g.mode };
+}
+// "Never below N%": 0..100, and the manual speed is raised to it, as the
+// daemon would run it (daemon._tick_motherboard) and the slider shows it.
+function floorChange(g, value) {
+  const min = clamp(Math.round(+value) || 0, 0, 100);
+  return { min_percent: min, manual_percent: Math.max(g.manual_percent, min) };
+}
+// Only where Louver sets the speed and a floor could matter (not BIOS, not a pump).
+const showsFloor = (kind, g) => kind === "mb" && !g.pump && g.mode !== "bios";
+
+// The banner when /api/state fails: the daemon's (or the desktop app's) own
+// words if it answered, as with 503 "Louver isn't running", else the bare fact.
+const unreachable = (e) => (e?.status ? e.message : `Louver daemon not reachable${e?.message ? ` (${e.message})` : ""}.`);
+
 return {
   OFF, UNSET, NO_READING, RAINBOW, MB_LIGHT, MB_ZERO_GRACE, clamp, normColor, gradientAt, thermalColor,
   hubFanPreview, strimerPreview, strimerPortPreview, ringCss, barCss,
   auraLook, auraPreview, auraBar, auraDetail, auraUsable, auraSkipped, auraShown,
   ramFrame, ramBar, ramDetail, ramShown,
   visiblePorts, mbCfg, sameZone, zoneKey, zones, nextZeroRuns, validSelection, parseHash, hashFor,
-  isCorner, effectTag, speedFoot,
+  isCorner, effectTag, speedFoot, speedModes, pumpChange, floorChange, showsFloor, unreachable,
 };
 })();
 if (typeof module !== "undefined") module.exports = LouverModel;

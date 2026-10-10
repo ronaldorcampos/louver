@@ -44,6 +44,7 @@ def test_contents(deb):
     for p in (
         "/usr/bin/louver",
         "/usr/lib/python3/dist-packages/louver/__main__.py",
+        "/usr/lib/python3/dist-packages/louver/apiclient.py",
         "/usr/lib/python3/dist-packages/louver/aura.py",
         "/usr/lib/python3/dist-packages/louver/web/index.html",
         "/usr/lib/python3/dist-packages/louver/web/fonts/unbounded.woff2",
@@ -54,6 +55,7 @@ def test_contents(deb):
         "/usr/lib/python3/dist-packages/louver/ramhelper.py",
         "/usr/lib/python3/dist-packages/louver/ramrgb.py",
         "/usr/lib/udev/rules.d/70-louver.rules",
+        "/usr/lib/tmpfiles.d/louver.conf",
         f"/usr/share/applications/{APP_ID}.desktop",
         f"/usr/share/icons/hicolor/scalable/apps/{APP_ID}.svg",
         f"/usr/share/icons/hicolor/symbolic/apps/{APP_ID}-symbolic.svg",
@@ -93,6 +95,11 @@ def test_installed_files_point_at_the_system_copy(deb, tmp_path):
     assert re.search(
         r"Comment: A port of OpenRGB's Corsair DRAM driver\n .*\n " + OPENRGB_COMMIT + r"; see NOTICE\.", dram
     )
+    # The machine-wide hardware lock's directory: plugdev only, setgid so the
+    # lock file is plugdev's too, sticky so no member can unlink another's
+    # held lock and start a second copy (louver/instance.py).
+    tmpfiles = (root / "usr/lib/tmpfiles.d/louver.conf").read_text().splitlines()
+    assert [x for x in tmpfiles if x and not x.startswith("#")] == ["d /run/louver 3770 root plugdev -"]
     rules = (root / "usr/lib/udev/rules.d/70-louver.rules").read_text()
     assert 'ATTRS{idVendor}=="0b05", ATTRS{idProduct}=="19af"' in rules
     sock = (root / "usr/lib/systemd/system/louver-ram.socket").read_text().splitlines()
@@ -146,6 +153,7 @@ SYSTEMD_STUBS = {
 echo "deb-systemd-helper $*" >> "$LOG"
 case "$*" in *was-enabled*) [ "$WAS_ENABLED" = yes ] ;; esac""",
     "deb-systemd-invoke": 'echo "deb-systemd-invoke $*" >> "$LOG"',
+    "systemd-tmpfiles": 'echo "systemd-tmpfiles $*" >> "$LOG"',
 }
 BASICS = ("cat",)  # all a stub needs from the system: PATH reaches nothing else
 
@@ -239,6 +247,11 @@ def test_postinst_configure(scripts, old_version):
         *(["deb-systemd-invoke try-restart louver-ram.service"] if old_version else []),
     ]
     assert "systemctl --user enable --now louver" in out  # never enabled for every account
+    # The lock's directory exists before the restarted daemons look for it.
+    restart = calls.index(_systemctl("try-restart", "louver.service")[0])
+    assert calls.index("systemd-tmpfiles --create louver.conf") < calls.index(_systemctl("daemon-reload")[0]) < restart
+    # An upgrade from a version that served on TCP: an open window runs the old code.
+    assert ("Quit from its tray icon, and open it again" in out) == bool(old_version)
     udev = [c for c in calls if c.startswith("udevadm")]
     if Path("/run/udev/control").is_socket():
         assert "udevadm trigger --action=change --subsystem-match=hidraw" in udev
@@ -273,6 +286,15 @@ def test_postinst_starts_the_socket_only_on_a_live_system(scripts, host, live):
     ]
 
 
+@pytest.mark.parametrize("host, live", HOSTS)
+def test_postinst_creates_the_lock_dir_only_on_a_live_system(scripts, host, live):
+    # Elsewhere (an image build, another root) tmpfiles.d makes it at boot.
+    _, calls = scripts("postinst", "configure", "", **host)
+    assert [c for c in calls if c.startswith("systemd-tmpfiles")] == (
+        ["systemd-tmpfiles --create louver.conf"] if live else []
+    )
+
+
 @pytest.mark.parametrize("action", ["abort-upgrade", "abort-deconfigure", "abort-remove"])
 def test_postinst_abort_puts_the_socket_back(scripts, action):
     _, calls = scripts("postinst", action, "0.1.0")
@@ -290,7 +312,7 @@ def test_postinst_abort_puts_the_socket_back(scripts, action):
 )
 def test_scripts_go_on_without_the_systemd_tools(scripts, script, args):
     _, calls = scripts(script, *args, tools=False)
-    assert _system(calls) == []
+    assert _system(calls) == [] and not [c for c in calls if c.startswith("systemd-tmpfiles")]
 
 
 @pytest.mark.parametrize("host, live", HOSTS)
@@ -326,7 +348,9 @@ def test_ui_relaunch_keeps_isolated_mode(monkeypatch):
     from louver import __main__ as cli
 
     launched = []
-    monkeypatch.setitem(sys.modules, "gi", types.ModuleType("gi"))
+    gi = types.ModuleType("gi")
+    gi.require_version = lambda name, version: None
+    monkeypatch.setitem(sys.modules, "gi", gi)
     monkeypatch.setattr(cli.subprocess, "Popen", lambda argv, **kw: launched.append(argv))
     for isolated, expect in (
         (1, ["/usr/bin/python3", "-I", "-m", "louver", "app"]),

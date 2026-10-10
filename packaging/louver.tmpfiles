@@ -1,0 +1,5 @@
+# The machine-wide hardware lock's directory (louver/instance.py): one Louver
+# at a time on the whole machine. Only plugdev, who can drive the hub and the
+# fan headers anyway, can take or hold the lock. Setgid: the lock file is
+# plugdev's. Sticky: nobody can unlink a lock another account's copy holds.
+d /run/louver 3770 root plugdev -

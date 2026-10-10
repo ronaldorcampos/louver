@@ -1,11 +1,10 @@
 import json
 import re
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import pytest
 
+from louver import apiclient
 from louver import config as cfgmod
 from louver.curves import Governor, interpolate, normalize
 from louver.daemon import Controller, serve
@@ -193,87 +192,60 @@ def test_shutdown_fixed_speed():
     assert r.hub_t.features == [Z([0xE0, 0x20 | i, 0, 70]) for i in range(3)]
 
 
-# ---------------- HTTP ----------------
+# ---------------- HTTP, on the API socket ----------------
 @pytest.fixture
-def server():
+def server(tmp_path_factory):
     r = Rig()
     r.ctrl.tick()
-    httpd = serve(r.ctrl, "127.0.0.1:0") if False else None
-    # bind an ephemeral port: serve() needs a concrete one, so pick it first
-    import socket
-
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    httpd = serve(r.ctrl, f"127.0.0.1:{port}")
-    yield r, port
-    httpd.shutdown()
+    sock = tmp_path_factory.mktemp("api") / "api.sock"
+    httpd = serve(r.ctrl, sock)
+    yield r, sock
+    httpd.stop()
 
 
-def _req(port, path, body=None, headers=None, host=None):
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{port}{path}",
-        method="GET" if body is None else "PUT",
-        data=None if body is None else json.dumps(body).encode(),
+def _req(sock, path, body=None, headers=None):
+    status, _, hdrs, data = apiclient.request(
+        "GET" if body is None else "PUT",
+        path,
+        None if body is None else json.dumps(body).encode(),
+        headers,
+        sock_path=sock,
+        timeout=5,
     )
-    for k, v in (headers or {}).items():
-        req.add_header(k, v)
-    if host:
-        req.add_header("Host", host)
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return resp.status, json.loads(resp.read()) if resp.headers[
-                "Content-Type"
-            ] == "application/json" else resp.read()
-    except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read())
+    return status, json.loads(data) if dict(hdrs)["Content-Type"] == "application/json" else data
 
 
 def test_http_state_and_static(server):
-    _, port = server
-    code, st = _req(port, "/api/state")
+    _, sock = server
+    code, st = _req(sock, "/api/state")
     assert code == 200 and st["hub"]["connected"]
-    code, html = _req(port, "/")
+    code, html = _req(sock, "/")
     assert code == 200 and b"Louver" in html
-    assert _req(port, "/../../etc/passwd")[0] == 404
+    assert _req(sock, "/../../etc/passwd")[0] == 404
 
 
 def test_http_serves_bundled_fonts(server):
-    _, port = server
+    _, sock = server
     css = (Path(__file__).parent.parent / "louver" / "web" / "style.css").read_text()
     fonts = re.findall(r'url\("(/fonts/[^"]+)"\)', css)
     assert sorted(fonts) == ["/fonts/martian-mono.woff2", "/fonts/unbounded.woff2"]
     for path in fonts:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as resp:
-            assert resp.headers["Content-Type"] == "font/woff2"
-            assert resp.read(4) == b"wOF2"
+        status, _, hdrs, data = apiclient.request("GET", path, sock_path=sock, timeout=5)
+        assert status == 200 and dict(hdrs)["Content-Type"] == "font/woff2" and data[:4] == b"wOF2"
     # Only the whitelisted files: the licence texts next to them aren't served.
-    assert _req(port, "/fonts/LICENSE-unbounded.txt")[0] == 404
-
-
-def test_http_rejects_foreign_host_and_missing_header(server):
-    r, port = server
-    assert _req(port, "/api/state", host="evil.example:80")[0] == 403
-    assert _req(port, "/api/config", body=r.ctrl.cfg)[0] == 403  # no X-Louver header
+    assert _req(sock, "/fonts/LICENSE-unbounded.txt")[0] == 404
 
 
 def test_http_put_config_validates(server):
-    r, port = server
+    r, sock = server
     cfg = json.loads(json.dumps(r.ctrl.cfg))
     cfg["hub"]["groups"][0]["mode"] = "turbo"
-    code, err = _req(port, "/api/config", body=cfg, headers={"X-Louver": "1"})
+    code, err = _req(sock, "/api/config", body=cfg)
     assert code == 400 and "mode" in err["error"]
     cfg["hub"]["groups"][0]["mode"] = "full"
-    code, new = _req(port, "/api/config", body=cfg, headers={"X-Louver": "1"})
+    code, new = _req(sock, "/api/config", body=cfg)
     assert code == 200 and new["hub"]["groups"][0]["mode"] == "full"
     assert r.speeds()[0] == 100
-
-
-def test_serve_refuses_non_loopback():
-    r = Rig()
-    with pytest.raises(ValueError):
-        serve(r.ctrl, "0.0.0.0:47999")
 
 
 def test_partially_unreadable_composite_sensor_is_reported():

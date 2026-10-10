@@ -9,6 +9,7 @@ from typing import NamedTuple
 # The quick speeds the tray offers; anything else is set in the window.
 # Labels match the window's mode chips (web/app.js MODE_LABELS).
 SPEEDS = (("quiet", "Quiet"), ("standard", "Standard"), ("high", "High"), ("full", "Full"))
+PUMP_SPEEDS = (("full", "Full"),)  # a pump header is only on the BIOS's curve (off the tray) or at Full
 MODE_LABELS = {
     **dict(SPEEDS),
     "manual": "Manual",
@@ -25,6 +26,7 @@ class Zone(NamedTuple):
     rpm: int
     failsafe: bool
     manual_percent: float
+    pump: bool = False
 
 
 def zones(cfg: dict, state: dict) -> list[Zone]:
@@ -60,9 +62,15 @@ def zones(cfg: dict, state: dict) -> list[Zone]:
                         int(s.get("rpm") or 0),
                         bool(s.get("failsafe")),
                         h["manual_percent"],
+                        bool(h.get("pump")),
                     )
                 )
     return out
+
+
+def speeds(z: Zone) -> tuple[tuple[str, str], ...]:
+    """The quick speeds the tray offers for ``z``."""
+    return PUMP_SPEEDS if z.pump else SPEEDS
 
 
 def mode_label(z: Zone) -> str:
@@ -105,7 +113,7 @@ def signature(cfg: dict | None, state: dict | None, themes: list[str]) -> tuple:
     if cfg is None or state is None:
         return ("down", tuple(themes))
     return (
-        tuple((z.key, z.name, z.mode, z.manual_percent) for z in zones(cfg, state)),
+        tuple((z.key, z.name, z.mode, z.manual_percent, z.pump) for z in zones(cfg, state)),
         cfg.get("theme"),
         tuple(themes),
     )

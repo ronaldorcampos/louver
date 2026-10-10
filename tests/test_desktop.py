@@ -4,34 +4,42 @@ import re
 import socket
 from pathlib import Path
 
+import pytest
+
 from louver import __main__ as cli
-from louver import autostart
+from louver import apiclient, autostart
 from louver import config as cfgmod
 
 
-def test_daemon_that_cannot_listen_leaves_autostart_alone(tmp_path, monkeypatch):
-    busy = socket.socket()
-    busy.bind(("127.0.0.1", 0))
+def test_daemon_that_cannot_serve_leaves_autostart_alone(tmp_path, monkeypatch):
+    from louver import daemon
+
+    # Never let this reach the hardware, whatever serve() does.
+    monkeypatch.setattr(daemon.Controller, "run_forever", lambda self, stop: pytest.fail("daemon ran"))
+    monkeypatch.setattr(daemon.Controller, "shutdown", lambda self: None)
+    sock = apiclient.socket_path()
+    sock.parent.mkdir(mode=0o700)
+    busy = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    busy.bind(str(sock))  # a copy that's still serving (the demo, on the default socket)
     busy.listen()
-    port = busy.getsockname()[1]
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
     cfg = cfgmod.validate({})
     cfg["app"]["start_on_login"] = True
     cfgmod.save(cfg, tmp_path / "louver" / "config.json")
     try:
-        assert cli.main(["daemon", "--listen", f"127.0.0.1:{port}"]) == cli.ALREADY_RUNNING
+        assert cli.main(["daemon"]) == cli.ALREADY_RUNNING
     finally:
         busy.close()
+    assert sock.is_socket()  # left to its owner
     assert not (tmp_path / "autostart" / "louver.desktop").exists()  # only the running copy writes it
 
 
 def test_explicit_config_is_used_and_status_reports_unreachable(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     other = tmp_path / "elsewhere.json"
-    other.write_text('{"listen": "127.0.0.1:1"}\n')  # never reach a real daemon
-    assert cli.main(["--config", str(other), "status"]) == 1
-    assert "daemon not reachable at 127.0.0.1:1" in capsys.readouterr().err
+    other.write_text('{"poll_interval": 2}\n')
+    assert cli.main(["--config", str(other), "status"]) == 1  # nothing serves the (test's) socket
+    assert "louver status: Louver isn't running: systemctl --user start louver" in capsys.readouterr().err
     assert not (tmp_path / "cfg" / "louver" / "config.json").exists()  # the default config is left alone
 
 

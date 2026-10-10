@@ -20,12 +20,12 @@ let savePending = false, cfgRev = null;
 
 async function api(path, body) {
   const opts = body === undefined ? {} : {
-    method: "PUT", body: JSON.stringify(body),
-    headers: { "Content-Type": "application/json", "X-Louver": "1" },
+    method: "PUT", body: JSON.stringify(body), headers: { "Content-Type": "application/json" },
   };
   const r = await fetch(path, opts);
   const j = await r.json();
-  if (!r.ok) throw new Error(j.error || r.statusText);
+  // e.g. 503 "Louver isn't running" from the desktop app, when the daemon is down
+  if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { status: r.status });
   return j;
 }
 
@@ -446,7 +446,7 @@ $("nav-settings").addEventListener("click", () => go({ view: "settings" }));
 function mbEntry(index) {
   let h = mbCfg(index);
   if (!h) {
-    h = { index, name: `Header ${index}`, mode: "bios", manual_percent: 50, sensor: "cpu", curve: meta.presets.standard.map((p) => [...p]) };
+    h = { index, name: `Header ${index}`, mode: "bios", manual_percent: 50, sensor: "cpu", curve: meta.presets.standard.map((p) => [...p]), pump: false, min_percent: 0 };
     cfg.motherboard.headers.push(h);
   }
   return h;
@@ -476,7 +476,14 @@ function renderSpeed() {
   fans.value = g.fans;
 
   const readOnly = isMb && !!state?.motherboard && !state.motherboard.writable;
-  $("mode-chips").replaceChildren(...(isMb ? meta.mb_fan_modes : meta.fan_modes).map((m) => el("button", {
+  $("mb-opts").classList.toggle("hidden", !isMb);
+  if (isMb) {
+    $("mb-pump").checked = !!g.pump;
+    $("mb-min-label").classList.toggle("hidden", !M.showsFloor(sel.kind, g));
+    $("mb-min").value = g.min_percent ?? 0;
+    $("mb-pump").disabled = $("mb-min").disabled = readOnly;
+  }
+  $("mode-chips").replaceChildren(...M.speedModes(meta, sel.kind, g).map((m) => el("button", {
     class: "chip" + (m === g.mode ? " on" : ""),
     ...(readOnly ? { disabled: "", title: "Read-only: install the hwmon udev rule (README)" } : {}),
     onclick: () => {
@@ -488,6 +495,7 @@ function renderSpeed() {
   }, MODE_LABELS[m])));
 
   $("manual-box").classList.toggle("hidden", g.mode !== "manual");
+  $("manual-range").min = isMb ? (g.min_percent ?? 0) : 0;  // a header's floor applies in manual mode too
   $("manual-range").value = g.manual_percent;
   $("manual-val").textContent = g.manual_percent + "%";
   $("curve-box").classList.toggle("hidden", g.mode === "manual" || g.mode === "mb_sync" || g.mode === "bios");
@@ -499,6 +507,16 @@ function renderSpeed() {
 
 $("port-sensor").addEventListener("change", (e) => { selCfg().sensor = e.target.value; save(0); renderZoneStats(); });
 $("port-fans").addEventListener("change", (e) => { selCfg().fans = +e.target.value; save(0); renderAll(); });
+$("mb-pump").addEventListener("change", (e) => {
+  const g = selCfg();
+  Object.assign(g, M.pumpChange(g, e.target.checked, meta.pump_modes));
+  save(0); renderSpeed(); renderZoneStats(); renderZoneList();
+});
+$("mb-min").addEventListener("change", (e) => {
+  const g = selCfg();
+  Object.assign(g, M.floorChange(g, e.target.value));
+  save(0); renderSpeed();
+});
 $("manual-range").addEventListener("input", (e) => {
   selCfg().manual_percent = +e.target.value;
   $("manual-val").textContent = e.target.value + "%";
@@ -1055,7 +1073,7 @@ async function poll() {
   try {
     state = await api("/api/state");
   } catch (e) {
-    const msg = "Louver daemon not reachable.";
+    const msg = M.unreachable(e);
     if ($("banner").textContent !== msg) $("banner").textContent = msg;
     $("banner").classList.remove("hidden");
     return;
@@ -1139,7 +1157,14 @@ function renderLab() {
 }
 
 (async function init() {
-  [cfg, meta, state] = await Promise.all([api("/api/config"), api("/api/meta"), api("/api/state")]);
+  try {
+    [cfg, meta, state] = await Promise.all([api("/api/config"), api("/api/meta"), api("/api/state")]);
+  } catch (e) {
+    $("banner").textContent = M.unreachable(e);
+    $("banner").classList.remove("hidden");
+    setTimeout(init, 3000);  // the daemon may still be starting
+    return;
+  }
   mbZeroRuns = M.nextZeroRuns({}, state);
   applyRoute(M.parseHash(location.hash));
   go({ view });

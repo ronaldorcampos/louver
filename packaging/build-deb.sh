@@ -32,6 +32,7 @@ root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT
 py="$root/usr/lib/python3/dist-packages"
 mkdir -p "$py" "$root/usr/bin" "$root/usr/lib/systemd/user" "$root/usr/lib/systemd/system" "$root/usr/lib/udev/rules.d" \
+  "$root/usr/lib/tmpfiles.d" \
   "$root/usr/share/applications" "$root/usr/share/icons" "$root/usr/share/doc/louver" "$root/DEBIAN"
 
 tracked() {  # tracked DIR DEST PATH...: copy git-tracked DIR/PATH files to DEST, paths relative to DIR
@@ -64,6 +65,9 @@ fi
 
 # The RAM RGB root helper: a system socket and the sandboxed service it starts.
 cp "$here/packaging/louver-ram.socket" "$here/packaging/louver-ram.service" "$root/usr/lib/systemd/system/"
+
+# /run/louver, for the machine-wide hardware lock (louver/instance.py).
+cp "$here/packaging/louver.tmpfiles" "$root/usr/lib/tmpfiles.d/louver.conf"
 
 # 70, not 99: TAG+="uaccess" only takes effect before 73-seat-late.rules.
 cp "$here/packaging/99-louver.rules" "$root/usr/lib/udev/rules.d/70-louver.rules"

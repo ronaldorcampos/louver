@@ -63,7 +63,11 @@
             </div>
           </div>
           <div class="chips" id="mode-chips" role="group" aria-label="Speed mode"></div>
-          <p class="hint hidden" id="mb-hint">BIOS control leaves this header on the board's own curve. Keep pump headers on BIOS control (or Full).</p>
+          <p class="hint hidden" id="mb-hint">BIOS control leaves this header on the board's own curve. For a pump, tick "Pump on this header": Louver then offers only BIOS control or Full.</p>
+          <div class="row gap hidden" id="mb-opts">
+            <label class="toggle"><input type="checkbox" id="mb-pump"><span></span>Pump on this header</label>
+            <label id="mb-min-label">Never below <span class="unit"><input type="number" min="0" max="100" step="1" id="mb-min"><i>%</i></span></label>
+          </div>
           <div class="inset note hidden" id="sync-note">This port follows the motherboard's fan signal. Louver reads the speed but doesn't set it, so there's no curve or sensor here.</div>
           <div id="manual-box" class="inset hidden">
             <label class="row between" for="manual-range">Manual speed <b class="manual-val" id="manual-val"></b></label>

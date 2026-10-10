@@ -104,3 +104,42 @@ def test_bad_header_config_rejected():
         mb_cfg({"index": 2, "mode": "mb_sync"})
     with pytest.raises(cfgmod.ConfigError):
         mb_cfg({"index": 2}, {"index": 2})
+
+
+def test_pump_header_is_only_bios_or_full():
+    for mode in ("quiet", "standard", "high", "manual", "curve"):
+        with pytest.raises(cfgmod.ConfigError, match="is a pump"):
+            mb_cfg({"index": 2, "mode": mode, "pump": True})
+    for mode in ("bios", "full"):
+        assert mb_cfg({"index": 2, "mode": mode, "pump": True})["motherboard"]["headers"][0]["pump"] is True
+    h = mb_cfg({"index": 2})["motherboard"]["headers"][0]
+    assert h["pump"] is False and h["min_percent"] == 0  # defaults, for headers saved before these existed
+    with pytest.raises(cfgmod.ConfigError, match="pump must be true or false"):
+        mb_cfg({"index": 2, "pump": "yes"})
+
+
+@pytest.mark.parametrize("bad", [-1, 101, "40", True, None, float("nan")])
+def test_header_min_percent_must_be_a_percentage(bad):
+    with pytest.raises(cfgmod.ConfigError, match="min_percent must be 0..100"):
+        mb_cfg({"index": 2, "mode": "quiet", "min_percent": bad})
+
+
+def test_header_floor_lifts_manual_and_curve_but_not_the_failsafe(tmp_path):
+    d = fake_chip(tmp_path)
+    r = Rig(
+        mb_cfg(
+            {"index": 2, "mode": "manual", "manual_percent": 10, "min_percent": 40},
+            {"index": 7, "mode": "quiet", "sensor": "cpu", "min_percent": 60},
+        ),
+        temps={"cpu": 50.0},
+    )
+    r.ctrl.mb = MotherboardFans(tmp_path)
+    r.ctrl.tick()
+    st = {h["index"]: h for h in r.ctrl.state()["motherboard"]["headers"]}
+    assert st[2]["percent"] == 40 and read(d, "pwm2") == round(40 * 2.55)  # manual 10%, floor 40%
+    assert st[7]["percent"] == 60  # quiet @ 50 C is below the floor
+    r.sensors.values["cpu"] = None
+    r.now += 1
+    r.ctrl.tick()
+    st = {h["index"]: h for h in r.ctrl.state()["motherboard"]["headers"]}
+    assert st[7]["percent"] == 100 and st[7]["failsafe"]  # the failsafe still wins

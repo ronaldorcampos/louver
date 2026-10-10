@@ -121,9 +121,9 @@ def test_strimer_per_port_mixes_hardware_and_software():
 
 def test_http_theme_endpoint(server):  # noqa: F811
     r, port = server
-    code, cfg = _req(port, "/api/theme", body={"name": "Stealth"}, headers={"X-Louver": "1"})
+    code, cfg = _req(port, "/api/theme", body={"name": "Stealth"})
     assert code == 200 and cfg["theme"] == "Stealth" and cfg["hub"]["lighting"][0]["mode"] == "Off"
-    code, err = _req(port, "/api/theme", body={"name": "Nope"}, headers={"X-Louver": "1"})
+    code, err = _req(port, "/api/theme", body={"name": "Nope"})
     assert code == 400
     code, m = _req(port, "/api/meta")
     assert {t["name"] for t in m["themes"]} == set(THEMES)

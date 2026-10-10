@@ -1,19 +1,27 @@
-"""Control loop + local HTTP API/UI server."""
+"""Control loop + the HTTP API/UI server on a Unix socket."""
 
 from __future__ import annotations
 
 import copy
+import errno
+import io
 import json
 import logging
+import os
+import socket
+import socketserver
+import stat
+import struct
 import threading
 import time
 from collections.abc import Callable
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 from . import aura, ramrgb
 from . import config as cfgmod
+from .apiclient import MAX_BODY, check_length, socket_dir
 from .aura import AuraMainboard, HidrawAccess
 from .curves import PRESETS, Governor, interpolate
 from .devices import DRIVERS, VENDOR_ID, LightingEffect, StrimerPlus, UniHubALV2, parse_color
@@ -85,6 +93,9 @@ class Controller:
         self._open = opener
         self._clock = clock
         self.lock = threading.RLock()
+        # Set by shutdown(): from then on nothing may touch the hardware again,
+        # not even a request the HTTP server was still answering.
+        self._stopped = False
         self.hub: UniHubALV2 | None = None
         self.strimer: StrimerPlus | None = None
         self.hub_firmware = ""
@@ -517,6 +528,8 @@ class Controller:
 
     def tick(self) -> None:
         with self.lock:
+            if self._stopped:
+                return
             now = self._clock()
             dt = 0.0 if self._last_tick is None else now - self._last_tick
             self._last_tick = now
@@ -582,7 +595,8 @@ class Controller:
             gov = self._mb_governors.setdefault(idx, Governor())
             if g["mode"] == "manual":
                 gov.reset()
-            pct = 100 if failsafe else int(round(gov.step(max(target, float(floor)), dt)))
+            low = max(float(floor), float(g["min_percent"]))  # the header's own floor, manual mode included
+            pct = 100 if failsafe else int(round(gov.step(max(target, low), dt)))
             st.update(
                 percent=pct,
                 temp=temp,
@@ -605,11 +619,17 @@ class Controller:
         """Apply ``change(current cfg) -> new cfg`` atomically: no other
         change can land between reading the config and applying it."""
         with self.lock:
+            self._refuse_if_stopped()
             return self.apply_config(change(self.cfg))
+
+    def _refuse_if_stopped(self) -> None:
+        if self._stopped:
+            raise cfgmod.ConfigError("Louver is stopping")
 
     def apply_config(self, new: dict) -> dict:
         new = cfgmod.validate(new)
         with self.lock:
+            self._refuse_if_stopped()
             old = self.cfg
             self.cfg = new
             self.cfg_rev += 1
@@ -717,6 +737,7 @@ class Controller:
             for c in req.get("colors") or ["#ff0000", "#ffd400", "#00ff6a", "#0088ff", "#b000ff", "#ff00c8"]
         ]
         with self.lock:
+            self._refuse_if_stopped()
             if self.hub is None:
                 raise cfgmod.ConfigError("hub not connected")
             try:
@@ -736,6 +757,7 @@ class Controller:
 
     def lab_end(self) -> None:
         with self.lock:
+            self._refuse_if_stopped()
             groups, self.lab_groups = sorted(self.lab_groups), set()
             if self.hub is not None and groups:
                 try:
@@ -797,6 +819,7 @@ class Controller:
 
     def shutdown(self) -> None:
         with self.lock:
+            self._stopped = True
             if self.mb is not None:
                 self.mb.release_all()  # BIOS curves take back over
             if self.aura is not None:  # its lights stay as they are
@@ -843,6 +866,7 @@ def meta(ctrl: Controller) -> dict:
     return {
         "fan_modes": list(cfgmod.FAN_MODES),
         "mb_fan_modes": list(cfgmod.MB_FAN_MODES),
+        "pump_modes": list(cfgmod.PUMP_MODES),
         "presets": PRESETS,
         "hub_lighting_modes": UniHubALV2.lighting_modes() + _SOFTWARE_META,
         "strimer_lighting_modes": StrimerPlus.lighting_modes() + _SOFTWARE_META,
@@ -865,23 +889,66 @@ _STATIC = {
 _CTYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".woff2": "font/woff2"}
 
 
-def make_handler(ctrl: Controller, allowed_hosts: set[str]):
+REQUEST_TIMEOUT = 10.0  # s a connection may stay silent, while sending its request or reading the reply
+REQUEST_DEADLINE = 15.0  # s a connection has in all to send its request, however it trickles in
+MAX_CONNECTIONS = 32
+STOP_WAIT = 3.0  # s stop() waits for requests being answered
+# The UI is these files and nothing else: no inline scripts, no other origins.
+_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+    "connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; "
+    "frame-ancestors 'none'"
+)
+
+
+class _DeadlineReader(io.RawIOBase):
+    """A connection's incoming bytes, by a deadline: REQUEST_TIMEOUT alone
+    applies per recv, so a client sending a byte at a time could hold its
+    slot indefinitely."""
+
+    def __init__(self, sock: socket.socket, deadline: float, idle: float):
+        self._sock, self._deadline, self._idle = sock, deadline, idle
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, b) -> int:
+        left = self._deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("request not received in time")
+        self._sock.settimeout(min(self._idle, left))
+        try:
+            return self._sock.recv_into(b)
+        finally:
+            self._sock.settimeout(self._idle)  # the reply gets the idle timeout, not what's left
+
+
+def make_handler(ctrl: Controller):
+    idle, deadline = REQUEST_TIMEOUT, REQUEST_DEADLINE
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "louver"
+        timeout = idle
+
+        def setup(self) -> None:
+            super().setup()
+            self.rfile.close()  # replaced: everything is read against the deadline
+            self.rfile = io.BufferedReader(_DeadlineReader(self.connection, time.monotonic() + deadline, idle))
 
         def log_message(self, fmt, *args):  # quiet by default
             log.debug("http: " + fmt, *args)
 
-        def _host_ok(self) -> bool:
-            # Blocks DNS-rebinding: only answer requests addressed to localhost.
-            return self.headers.get("Host", "") in allowed_hosts
+        def address_string(self) -> str:
+            return "unix"  # an AF_UNIX peer has no address
 
-        def _send(self, code: int, body: bytes, ctype: str) -> None:
+        def _send(self, code: int, body: bytes, ctype: str, headers: dict | None = None) -> None:
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
             self.end_headers()
             self.wfile.write(body)
 
@@ -889,8 +956,6 @@ def make_handler(ctrl: Controller, allowed_hosts: set[str]):
             self._send(code, json.dumps(obj).encode(), "application/json")
 
         def do_GET(self):
-            if not self._host_ok():
-                return self._json(HTTPStatus.FORBIDDEN, {"error": "bad host"})
             path = self.path.split("?", 1)[0]
             if path == "/api/state":
                 return self._json(200, ctrl.state())
@@ -902,20 +967,26 @@ def make_handler(ctrl: Controller, allowed_hosts: set[str]):
             if name is None:
                 return self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             f = WEB_DIR / name
-            self._send(200, f.read_bytes(), _CTYPES[f.suffix])
+            extra = {"Content-Security-Policy": _CSP} if f.suffix == ".html" else None
+            self._send(200, f.read_bytes(), _CTYPES[f.suffix], extra)
 
         def do_PUT(self):
-            if not self._host_ok():
-                return self._json(HTTPStatus.FORBIDDEN, {"error": "bad host"})
-            # A custom header forces a CORS preflight, which we never grant,
-            # so other websites can't drive the fans through the browser.
-            if self.headers.get("X-Louver") != "1":
-                return self._json(HTTPStatus.FORBIDDEN, {"error": "missing X-Louver header"})
             if self.path not in ("/api/config", "/api/theme", "/api/zone-mode", "/api/lab"):
                 return self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             try:
-                n = int(self.headers.get("Content-Length", "0"))
-                body = json.loads(self.rfile.read(min(n, 1 << 20)))
+                n = int(self.headers.get("Content-Length", ""))
+            except ValueError:
+                return self._json(HTTPStatus.LENGTH_REQUIRED, {"error": "Content-Length required"})
+            if not 0 <= n <= MAX_BODY:
+                # Negative too: rfile.read(-1) would read until the client stops.
+                return self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": f"body must be 0..{MAX_BODY} bytes"})
+            try:
+                raw = self.rfile.read(n)
+            except OSError:  # timed out or reset mid-body
+                self.close_connection = True
+                return
+            try:
+                body = json.loads(raw)
                 if not isinstance(body, dict):
                     raise cfgmod.ConfigError("body must be an object")
                 if self.path == "/api/lab":
@@ -941,13 +1012,126 @@ def make_handler(ctrl: Controller, allowed_hosts: set[str]):
     return Handler
 
 
-def serve(ctrl: Controller, listen: str) -> ThreadingHTTPServer:
-    host, port_s = listen.rsplit(":", 1)
-    port = int(port_s)
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        raise ValueError("refusing to listen on a non-loopback address")
-    allowed = {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
-    httpd = ThreadingHTTPServer((host, port), make_handler(ctrl, allowed))
-    httpd.daemon_threads = True
+def _peer_uid(sock: socket.socket) -> int:
+    # struct ucred: pid_t pid (signed), uid_t uid, gid_t gid (unsigned)
+    _pid, uid, _gid = struct.unpack(
+        "iII", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("iII"))
+    )
+    return uid
+
+
+def _private_dir(d: Path, tighten: bool) -> None:
+    """``d`` exists, is a directory of ours and nobody else can write in it.
+    Louver's own directory is made owner-only; a directory given with
+    --socket is refused instead, rather than changing its mode. Only ``d``
+    itself is checked, not the directories above it: --socket's help says
+    to give it a directory only you can write to."""
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    st = os.lstat(d)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        raise PermissionError(errno.EPERM, "not a directory of yours", str(d))
+    if tighten and st.st_mode & 0o077:
+        os.chmod(d, 0o700)
+    elif st.st_mode & 0o022:
+        raise PermissionError(errno.EPERM, "other accounts can write in this directory", str(d))
+
+
+def _clear_stale(path: Path) -> None:
+    """Remove a socket left by a copy that didn't shut down cleanly. Anything
+    else at ``path`` is refused, and so is a socket someone still serves."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISSOCK(st.st_mode) or st.st_uid != os.getuid():
+        raise FileExistsError(errno.EEXIST, "something other than a Louver socket is there", str(path))
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    probe.settimeout(1.0)
+    try:
+        probe.connect(str(path))
+    except ConnectionRefusedError:
+        pass  # nobody listening: stale
+    else:  # the demo doesn't take the instance lock, so a live copy may be here
+        raise OSError(errno.EADDRINUSE, "another Louver is serving this socket", str(path))
+    finally:
+        probe.close()
+    os.unlink(path)
+
+
+class _Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    """A thread per connection, but at most MAX_CONNECTIONS of them: beyond
+    that a new connection is closed at once instead of costing a thread.
+    Only connections from our own account are served."""
+
+    daemon_threads = True
+
+    def __init__(self, path: Path, handler, uid: int | None = None):
+        self._max = MAX_CONNECTIONS
+        self._slots = threading.BoundedSemaphore(self._max)
+        self.uid = os.getuid() if uid is None else uid
+        self.path = path
+        self._ident: tuple[int, int] | None = None
+        super().__init__(str(path), handler)
+
+    def server_bind(self) -> None:
+        old = os.umask(0o177)  # the socket file is born 0600
+        try:
+            super().server_bind()
+        finally:
+            os.umask(old)
+        st = os.lstat(self.path)
+        self._ident = (st.st_dev, st.st_ino)
+
+    def verify_request(self, request, client_address) -> bool:
+        # The directory already keeps other accounts out; this is the backstop.
+        try:
+            return _peer_uid(request) == self.uid
+        except OSError:
+            return False
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+    def stop(self) -> None:
+        """Stop serving, let requests being answered finish (for STOP_WAIT at
+        most), and remove the socket file, if it's still ours. One still
+        running after that is refused by the Controller once it has shut
+        down, so it can't take the hardware back."""
+        self.shutdown()
+        self.server_close()
+        end = time.monotonic() + STOP_WAIT
+        for _ in range(self._max):  # every slot back: no handler is running
+            if not self._slots.acquire(timeout=max(0.0, end - time.monotonic())):
+                log.warning("stopping with a request still being answered")
+                break
+        try:
+            st = os.lstat(self.path)
+        except FileNotFoundError:
+            return
+        if (st.st_dev, st.st_ino) == self._ident:
+            os.unlink(self.path)
+
+
+def serve(ctrl: Controller, sock_path: Path) -> _Server:
+    """Serve the API and the UI on ``sock_path``. Only one copy may hold the
+    hardware lock, so a socket left there is stale unless the demo serves it."""
+    sock_path = Path(sock_path)
+    check_length(sock_path)
+    _private_dir(sock_path.parent, tighten=sock_path.parent == socket_dir())
+    _clear_stale(sock_path)
+    httpd = _Server(sock_path, make_handler(ctrl))
     threading.Thread(target=httpd.serve_forever, name="http", daemon=True).start()
     return httpd

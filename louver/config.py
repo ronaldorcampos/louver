@@ -19,6 +19,7 @@ from .themes import THEMES
 FAN_MODES = ("quiet", "standard", "high", "full", "manual", "curve", "mb_sync")
 # Motherboard headers: "bios" leaves the header on the board's own curve.
 MB_FAN_MODES = ("bios", "quiet", "standard", "high", "full", "manual", "curve")
+PUMP_MODES = ("bios", "full")
 EXIT_ACTIONS = ("mb_sync", "hold", "fixed")
 
 
@@ -73,7 +74,6 @@ DEFAULTS: dict = {
     "min_percent": 0,
     "on_exit": "mb_sync",
     "on_exit_percent": 60,
-    "listen": "127.0.0.1:47321",
     "hub": {
         "mb_rgb_sync": False,
         "groups": [_default_group(i) for i in range(4)],
@@ -208,6 +208,7 @@ def validate(cfg: dict) -> dict:
         raise ConfigError("min_percent must be 0..100")
     if cfg["on_exit"] not in EXIT_ACTIONS:
         raise ConfigError(f"on_exit must be one of {EXIT_ACTIONS}")
+    cfg.pop("listen", None)  # retired: the API is a Unix socket now, not a TCP port
     groups = cfg["hub"]["groups"]
     if len(groups) != 4:
         raise ConfigError("hub.groups must have 4 entries")
@@ -236,12 +237,22 @@ def validate(cfg: dict) -> dict:
         if h["index"] in seen:
             raise ConfigError(f"motherboard header {h['index']} listed twice")
         seen.add(h["index"])
-        full = _merge({**_default_group(0), "name": f"Header {h['index']}", "mode": "bios"}, h)
+        full = _merge(
+            {**_default_group(0), "name": f"Header {h['index']}", "mode": "bios", "pump": False, "min_percent": 0}, h
+        )
         full.pop("fans", None)
         if full["mode"] not in MB_FAN_MODES:
             raise ConfigError(f"motherboard header {h['index']}: mode must be one of {MB_FAN_MODES}")
         if not 0 <= float(full["manual_percent"]) <= 100:
             raise ConfigError(f"motherboard header {h['index']}: manual_percent must be 0..100")
+        if not isinstance(full["pump"], bool):
+            raise ConfigError(f"motherboard header {h['index']}: pump must be true or false")
+        # A pump header is never slowed by Louver: the BIOS's curve, or full speed.
+        if full["pump"] and full["mode"] not in PUMP_MODES:
+            raise ConfigError(f"motherboard header {h['index']} is a pump: only BIOS control or Full")
+        mp = full["min_percent"]
+        if isinstance(mp, bool) or not isinstance(mp, int | float) or not 0 <= mp <= 100:
+            raise ConfigError(f"motherboard header {h['index']}: min_percent must be 0..100")
         try:
             full["curve"] = [list(p) for p in normalize(full["curve"])]
         except (ValueError, TypeError) as e:

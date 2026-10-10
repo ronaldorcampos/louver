@@ -312,3 +312,46 @@ test("effectTag for RAM looks", () => {
   assert.equal(M.effectTag("ram", { name: "Static", max_colors: 1 }), "one colour");
   assert.equal(M.effectTag("ram", { name: "Gradient", max_colors: 6 }), "colour stops along each stick");
 });
+
+test("speedModes: a pump header offers only BIOS and Full", () => {
+  const meta = { fan_modes: ["quiet", "mb_sync"], mb_fan_modes: ["bios", "quiet", "full", "manual"], pump_modes: ["bios", "full"] };
+  assert.deepEqual(M.speedModes(meta, "hub", { pump: true }), ["quiet", "mb_sync"]);  // hub ports have no pump flag
+  assert.deepEqual(M.speedModes(meta, "mb", { pump: false }), meta.mb_fan_modes);
+  assert.deepEqual(M.speedModes(meta, "mb", {}), meta.mb_fan_modes);
+  assert.deepEqual(M.speedModes(meta, "mb", { pump: true }), ["bios", "full"]);
+});
+
+test("pumpChange moves a slowing mode to BIOS, keeps BIOS and Full", () => {
+  const P = ["bios", "full"];
+  assert.deepEqual(M.pumpChange({ mode: "quiet" }, true, P), { pump: true, mode: "bios" });
+  assert.deepEqual(M.pumpChange({ mode: "manual" }, true, P), { pump: true, mode: "bios" });
+  assert.deepEqual(M.pumpChange({ mode: "full" }, true, P), { pump: true, mode: "full" });
+  assert.deepEqual(M.pumpChange({ mode: "bios" }, true, P), { pump: true, mode: "bios" });
+  assert.deepEqual(M.pumpChange({ mode: "full" }, false, P), { pump: false, mode: "full" });  // unticking changes nothing else
+});
+
+test("floorChange clamps to 0..100 and lifts the manual speed to it", () => {
+  assert.deepEqual(M.floorChange({ manual_percent: 10 }, "40"), { min_percent: 40, manual_percent: 40 });
+  assert.deepEqual(M.floorChange({ manual_percent: 70 }, "40"), { min_percent: 40, manual_percent: 70 });
+  assert.deepEqual(M.floorChange({ manual_percent: 50 }, "150"), { min_percent: 100, manual_percent: 100 });
+  assert.deepEqual(M.floorChange({ manual_percent: 50 }, "-5"), { min_percent: 0, manual_percent: 50 });
+  assert.deepEqual(M.floorChange({ manual_percent: 50 }, ""), { min_percent: 0, manual_percent: 50 });
+  assert.deepEqual(M.floorChange({ manual_percent: 50 }, "abc"), { min_percent: 0, manual_percent: 50 });
+  assert.deepEqual(M.floorChange({ manual_percent: 50 }, "33.6"), { min_percent: 34, manual_percent: 50 });
+});
+
+test("showsFloor: only on a header Louver drives that isn't a pump", () => {
+  assert.equal(M.showsFloor("mb", { mode: "quiet", pump: false }), true);
+  assert.equal(M.showsFloor("mb", { mode: "manual" }), true);
+  assert.equal(M.showsFloor("mb", { mode: "bios", pump: false }), false);
+  assert.equal(M.showsFloor("mb", { mode: "full", pump: true }), false);
+  assert.equal(M.showsFloor("hub", { mode: "quiet" }), false);
+});
+
+test("unreachable shows the daemon's words when it answered", () => {
+  const e503 = Object.assign(new Error("Louver isn't running: systemctl --user start louver"), { status: 503 });
+  assert.equal(M.unreachable(e503), "Louver isn't running: systemctl --user start louver");
+  assert.equal(M.unreachable(new TypeError("Load failed")), "Louver daemon not reachable (Load failed).");
+  assert.equal(M.unreachable(new Error("")), "Louver daemon not reachable.");
+  assert.equal(M.unreachable(undefined), "Louver daemon not reachable.");
+});

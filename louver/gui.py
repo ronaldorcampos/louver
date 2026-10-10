@@ -2,17 +2,16 @@
 
 Fan and RGB control live in the daemon (``louver daemon``, a systemd user
 service); this process is only the window and the tray. Quitting it never
-stops fan control.
+stops fan control. The window loads the UI from ``louver://app/``: each of
+its requests is passed on to the daemon's Unix socket (apiclient.proxy).
 """
 
 from __future__ import annotations
 
-import json
 import os
 import sys
+import threading
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 # WebKitGTK renders a blank window on NVIDIA + Wayland with the DMA-BUF
@@ -24,7 +23,8 @@ import gi  # noqa: E402
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("WebKit2", "4.1")
-from gi.repository import Gio, GLib, Gtk, WebKit2  # noqa: E402
+gi.require_version("Soup", "3.0")
+from gi.repository import Gio, GLib, Gtk, Soup, WebKit2  # noqa: E402
 
 try:
     gi.require_version("AyatanaAppIndicator3", "0.1")
@@ -32,16 +32,20 @@ try:
 except (ValueError, ImportError):
     AppIndicator = None
 
-from . import tray  # noqa: E402
+from . import apiclient, tray  # noqa: E402
 from .gui_ids import APP_ID, TRAY_ICON  # noqa: E402
 
 ICON_DIR = Path(__file__).resolve().parent.parent / "packaging" / "icons" / "hicolor"  # running from a checkout
+SCHEME = "louver"
+API_ERRORS = (OSError, ValueError, apiclient.ApiError)
 
 
 class LouverApp(Gtk.Application):
-    def __init__(self, base_url: str):
+    def __init__(self, sock_path: Path):
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
-        self.base = base_url.rstrip("/")
+        self.sock = sock_path
+        self.base = apiclient.BASE
+        self._requests: set = set()  # louver:// requests in flight: kept alive until answered
         self.window: Gtk.Window | None = None
         self.indicator = None
         self.menu: Gtk.Menu | None = None
@@ -56,19 +60,61 @@ class LouverApp(Gtk.Application):
 
     # --- daemon API ---------------------------------------------------------
     def api(self, path: str, body: dict | None = None):
-        req = urllib.request.Request(
-            self.base + path,
-            data=None if body is None else json.dumps(body).encode(),
-            method="GET" if body is None else "PUT",
-            headers={"Content-Type": "application/json", "X-Louver": "1"},
+        return apiclient.call(path, body, sock_path=self.sock, timeout=3)
+
+    # --- louver://app/ ------------------------------------------------------
+    def _register_scheme(self, ctx: WebKit2.WebContext) -> None:
+        ctx.register_uri_scheme(SCHEME, self._serve_scheme)
+        sec = ctx.get_security_manager()
+        sec.register_uri_scheme_as_secure(SCHEME)
+        # For the page's fetch() of louver://app/api/...: WebKit's loader lets
+        # fetch() at a non-HTTP scheme only if it's CORS-enabled. The handler
+        # serves louver://app alone, so this opens nothing to other origins.
+        sec.register_uri_scheme_as_cors_enabled(SCHEME)
+
+    def _serve_scheme(self, request, *_):
+        """Runs on the main loop: read the request here, ask the daemon from a
+        thread (a slow answer mustn't freeze the window), finish back here."""
+        method = request.get_http_method() or "GET"
+        uri = request.get_uri()
+        headers = request.get_http_headers()
+        ctype = headers.get_one("Content-Type") if headers is not None else None
+        try:
+            body = _read_body(request.get_http_body())
+        except GLib.Error as e:
+            return self._finish(request, apiclient.ProxyError(f"can't read the request: {e.message}"))
+        self._requests.add(request)
+
+        def work():
+            try:
+                reply = apiclient.proxy(method, uri, body, ctype, sock_path=self.sock)
+            except Exception as e:  # anything, so the request is always finished
+                reply = e
+            GLib.idle_add(self._finish, request, reply)
+
+        threading.Thread(target=work, name="louver-scheme", daemon=True).start()
+
+    def _finish(self, request, reply) -> bool:
+        self._requests.discard(request)
+        if isinstance(reply, Exception):
+            request.finish_error(GLib.Error.new_literal(Gio.io_error_quark(), str(reply), Gio.IOErrorEnum.FAILED))
+            return False
+        resp = WebKit2.URISchemeResponse.new(
+            Gio.MemoryInputStream.new_from_bytes(GLib.Bytes.new(reply.body)), len(reply.body)
         )
-        with urllib.request.urlopen(req, timeout=3) as r:
-            return json.loads(r.read())
+        resp.set_status(reply.status, reply.reason or None)
+        resp.set_content_type(reply.content_type)
+        headers = Soup.MessageHeaders.new(Soup.MessageHeadersType.RESPONSE)
+        for k, v in reply.headers:  # the type again (this replaces it) and the CSP
+            headers.append(k, v)
+        resp.set_http_headers(headers)
+        request.finish_with_response(resp)
+        return False
 
     def refresh_settings(self) -> None:
         try:
             self.app_cfg = self.api("/api/config").get("app", self.app_cfg)
-        except (urllib.error.URLError, OSError, ValueError):
+        except API_ERRORS:
             pass  # daemon down: keep the last known settings
         self._sync_tray_visibility()
 
@@ -128,6 +174,7 @@ class LouverApp(Gtk.Application):
             if icon.exists():
                 win.set_icon_from_file(str(icon))
         view = WebKit2.WebView()
+        self._register_scheme(view.get_context())  # once: the window is built once and kept
         settings = view.get_settings()
         settings.set_enable_developer_extras(False)
         settings.set_enable_back_forward_navigation_gestures(False)
@@ -140,10 +187,10 @@ class LouverApp(Gtk.Application):
         return win
 
     def _keep_local(self, view, decision, kind):
-        # Never navigate the app window away from the local UI.
+        # Never navigate the app window away from the local UI (or its error page).
         if kind == WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
             uri = decision.get_navigation_action().get_request().get_uri()
-            if not uri.startswith(self.base):
+            if not apiclient.window_may_open(uri):
                 decision.ignore()
                 return True
         return False
@@ -206,11 +253,11 @@ class LouverApp(Gtk.Application):
         zones = tray.zones(cfg, state) if cfg is not None and state is not None else []
         for z in zones:
             sub = Gtk.Menu()
-            for mode, label in tray.SPEEDS:
+            for mode, label in tray.speeds(z):
                 item = self._radio(label, z.mode == mode)
                 item.connect("activate", self.set_zone_mode, z.key, mode)
                 sub.append(item)
-            if z.mode not in dict(tray.SPEEDS):  # set in the window: show it, but it's not a tray choice
+            if z.mode not in dict(tray.speeds(z)):  # set in the window: show it, but it's not a tray choice
                 item = self._radio(tray.mode_label(z), True)
                 item.set_sensitive(False)
                 sub.append(item)
@@ -247,7 +294,7 @@ class LouverApp(Gtk.Application):
     def _put(self, path: str, body: dict) -> None:
         try:
             self.api(path, body)
-        except (urllib.error.URLError, OSError, ValueError) as e:
+        except API_ERRORS as e:
             print(f"{path} failed: {e}", file=sys.stderr)
         # Rebuild either way: a click un-ticks a check item before we get
         # here, and a failed change must show the old choice again.
@@ -268,7 +315,7 @@ class LouverApp(Gtk.Application):
             return
         try:
             meta = self.api("/api/meta")
-        except (urllib.error.URLError, OSError, ValueError):
+        except API_ERRORS:
             return
         self.themes = [t["name"] for t in meta.get("themes", [])]
         self.sensor_labels = {s["id"]: s["label"] for s in meta.get("sensors", [])}
@@ -281,7 +328,7 @@ class LouverApp(Gtk.Application):
         try:
             state = self.api("/api/state")
             cfg = self.api("/api/config")
-        except (urllib.error.URLError, OSError, ValueError):
+        except API_ERRORS:
             state = cfg = None
         if cfg is not None:
             self.app_cfg = cfg.get("app", self.app_cfg)
@@ -297,6 +344,23 @@ class LouverApp(Gtk.Application):
         return True
 
 
-def run(base_url: str, argv: list[str]) -> int:
-    app = LouverApp(base_url)
+def _read_body(stream) -> bytes | None:
+    """The request body, cut off just past apiclient.MAX_BODY: proxy() then
+    refuses it as too large without the rest being read."""
+    if stream is None:
+        return None
+    data = bytearray()
+    try:
+        while len(data) <= apiclient.MAX_BODY:
+            chunk = stream.read_bytes(min(65536, apiclient.MAX_BODY + 1 - len(data)), None).get_data()
+            if not chunk:
+                break
+            data += chunk
+    finally:
+        stream.close(None)
+    return bytes(data)
+
+
+def run(sock_path: Path, argv: list[str]) -> int:
+    app = LouverApp(sock_path)
     return app.run([sys.argv[0], *argv])

@@ -3,7 +3,9 @@ set -e
 
 # systemctl --user "$@" for each logged-in user, best effort.
 # The service is per user and never enabled globally: a global enable also
-# starts it in the login screen's user session, which takes the port first.
+# starts it in the login screen's user session, which would drive the fans
+# too (the machine-wide lock in /run/louver only stops that between plugdev
+# members, and the login screen's account usually isn't one).
 each_user() {
     command -v loginctl >/dev/null 2>&1 || return 0
     loginctl list-users --no-legend 2>/dev/null | while read -r uid user _; do
@@ -26,12 +28,22 @@ if [ "$1" = configure ]; then
             udevadm trigger --action=add --subsystem-match=hwmon --attr-match="name=$chip" || true
         done
     fi
+    # /run/louver now, not at the next boot: the machine-wide hardware lock's
+    # directory (tmpfiles.d/louver.conf). Before the restarts below, so the
+    # daemons they start take that lock too. Only with this system's systemd
+    # running, as for the RAM socket further down.
+    if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ] && command -v systemd-tmpfiles >/dev/null 2>&1; then
+        systemd-tmpfiles --create louver.conf >/dev/null || true
+    fi
     # An upgrade: running daemons move to the new code (and its web UI
     # files), under the new unit file if that changed too.
     each_user daemon-reload
     each_user try-restart louver.service
     echo "Louver: to start fan control now and at every login, run (as your user):"
     echo "  systemctl --user enable --now louver"
+    if [ -n "$2" ]; then  # an open window still runs the old code, which may not reach the new service
+        echo "Louver: if the Louver app is open, close its window, choose Quit from its tray icon, and open it again."
+    fi
 fi
 
 # The RAM RGB helper's socket, the way dh_installsystemd does it: enabled on

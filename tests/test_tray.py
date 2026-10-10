@@ -48,6 +48,20 @@ def test_zones_are_ports_with_fans_and_louver_controlled_headers():
     assert zs[3].name == "Top" and zs[3].rpm == 1450
 
 
+def test_a_pump_header_is_offered_only_full():
+    cfg = _cfg(headers=[{"index": 2, "mode": "full", "pump": True}, {"index": 4, "mode": "quiet"}])
+    zs = {z.key: z for z in tray.zones(cfg, _state(headers=[(2, 3000, 40.0), (4, 900, 40.0)]))}
+    assert zs["mb-2"].pump and not zs["mb-4"].pump and not zs["hub-0"].pump
+    assert tray.speeds(zs["mb-2"]) == (("full", "Full"),)  # what the daemon accepts for a pump, BIOS aside
+    assert tray.speeds(zs["mb-4"]) == tray.speeds(zs["hub-0"]) == tray.SPEEDS
+    for mode, _ in tray.speeds(zs["mb-2"]):  # every one it offers goes through
+        cfgmod.validate(cfgmod.set_zone_mode(cfg, "mb-2", mode))
+    # Ticking "pump" in the window reshapes the tray menu.
+    unpumped = _cfg(headers=[{"index": 2, "mode": "full"}, {"index": 4, "mode": "quiet"}])
+    st = _state(headers=[(2, 3000, 40.0), (4, 900, 40.0)])
+    assert tray.signature(cfg, st, []) != tray.signature(unpumped, st, [])
+
+
 def test_read_only_motherboard_headers_are_left_out():
     cfg = _cfg(headers=[{"index": 2, "mode": "curve"}])
     assert [z.key for z in tray.zones(cfg, _state(headers=[(2, 1450, 40.0)], writable=False))] == [
@@ -132,16 +146,28 @@ def test_set_zone_mode_rejects(zone, mode):
 def test_http_zone_mode(server):  # noqa: F811
     r, port = server
     rev = r.ctrl.state()["config_rev"]
-    code, cfg = _req(port, "/api/zone-mode", body={"zone": "hub-1", "mode": "high"}, headers={"X-Louver": "1"})
+    code, cfg = _req(port, "/api/zone-mode", body={"zone": "hub-1", "mode": "high"})
     assert (
         code == 200 and cfg["hub"]["groups"][1]["mode"] == "high" and r.ctrl.cfg["hub"]["groups"][1]["mode"] == "high"
     )
     assert r.ctrl.state()["config_rev"] == rev + 1
-    code, err = _req(port, "/api/zone-mode", body={"zone": "hub-9", "mode": "high"}, headers={"X-Louver": "1"})
+    code, err = _req(port, "/api/zone-mode", body={"zone": "hub-9", "mode": "high"})
     assert code == 400 and "unknown zone" in err["error"]
-    code, _ = _req(port, "/api/zone-mode", body={"zone": "hub-1", "mode": "full"})  # no X-Louver: refused
-    assert code == 403 and r.ctrl.cfg["hub"]["groups"][1]["mode"] == "high"
     assert r.ctrl.state()["config_rev"] == rev + 1  # failed requests don't count as changes
+
+
+def test_http_zone_mode_keeps_a_pump_header_on_bios_or_full(server):  # noqa: F811
+    r, sock = server
+    cfg = r.ctrl.cfg
+    cfg["motherboard"]["headers"] = [{"index": 3, "mode": "bios", "pump": True}]
+    r.ctrl.apply_config(cfg)
+    rev = r.ctrl.state()["config_rev"]
+    code, err = _req(sock, "/api/zone-mode", body={"zone": "mb-3", "mode": "quiet"})  # a tray speed
+    assert code == 400 and "is a pump" in err["error"]
+    assert r.ctrl.cfg["motherboard"]["headers"][0]["mode"] == "bios" and r.ctrl.state()["config_rev"] == rev
+    code, new = _req(sock, "/api/zone-mode", body={"zone": "mb-3", "mode": "full"})
+    h = new["motherboard"]["headers"][0]
+    assert code == 200 and h["mode"] == "full" and h["pump"] is True
 
 
 def test_every_config_change_bumps_the_revision():

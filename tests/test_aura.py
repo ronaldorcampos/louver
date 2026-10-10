@@ -480,7 +480,7 @@ def test_http_state_and_meta_carry_motherboard_rgb(server):  # noqa: F811
     assert modes["Static"] == 1 and modes["Rainbow"] == 0 and "Direct" not in modes and len(modes) == 18
     cfg = json.loads(json.dumps(r.ctrl.cfg))
     cfg["motherboard_rgb"]["enabled"] = True
-    code, new = _req(port, "/api/config", body=cfg, headers={"X-Louver": "1"})
+    code, new = _req(port, "/api/config", body=cfg)
     assert code == 200 and new["motherboard_rgb"]["enabled"]
     assert _req(port, "/api/state")[1]["motherboard_rgb"]["connected"]
 
@@ -724,13 +724,13 @@ def test_demo_turns_motherboard_rgb_on_in_memory_only(tmp_path, monkeypatch):
         def __init__(self, cfg, cfg_path, sensors, **kw):
             made.append((cfg, cfg_path, kw))
 
-    def no_listen(ctrl, listen):
+    def no_listen(ctrl, sock):
         raise OSError(98, "in use")
 
     monkeypatch.setattr(daemon, "Controller", Capture)
     monkeypatch.setattr(daemon, "serve", no_listen)
     cfg = cfgmod.validate({})
-    args = argparse.Namespace(demo=True, listen="127.0.0.1:1")
+    args = argparse.Namespace(demo=True, socket=None)
     assert cli.cmd_daemon(args, cfg, tmp_path / "config.json") == cli.ALREADY_RUNNING
     ((demo_cfg, cfg_path, kw),) = made
     assert demo_cfg["motherboard_rgb"]["enabled"] is True and cfg_path is None

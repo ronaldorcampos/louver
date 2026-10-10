@@ -1,8 +1,8 @@
 """louver command line.
 
-louver daemon            run fan control + the web UI (127.0.0.1:47321)
+louver daemon            run fan control + the API and UI, on a Unix socket only you can reach
 louver app [--autostart] the desktop app: window + tray icon
-louver ui                open the desktop app (falls back to a browser window)
+louver ui                open the desktop app
 louver status            show RPM / duty / temps from the running daemon
 louver set PORT PERCENT  put a port in manual mode at PERCENT (via daemon)
 louver probe             read-only hardware check, no daemon needed
@@ -15,18 +15,15 @@ louver mb-test N PCT     run motherboard header N at PCT for a few seconds, then
 from __future__ import annotations
 
 import argparse
-import json
+import errno
 import logging
-import shutil
 import signal
 import subprocess
 import sys
 import threading
-import urllib.error
-import urllib.request
 from pathlib import Path
 
-from . import aura, instance, ramrgb
+from . import apiclient, aura, instance, ramrgb
 from . import config as cfgmod
 from .devices import DRIVERS, VENDOR_ID, StrimerPlus, UniHubALV2
 from .hidraw import HidrawTransport, enumerate_hidraw
@@ -36,24 +33,19 @@ ALREADY_RUNNING = 3  # the unit's RestartPreventExitStatus: don't retry against 
 
 def _hardware_lock(what: str, hint: str):
     """Take the one-process-at-a-time hardware lock, or explain who holds it."""
-    got = instance.try_acquire()
+    got = instance.try_acquire_hardware()
     if isinstance(got, instance.Lock):
         return got
-    print(f"{what}: Louver is already running{f' (pid {got.pid})' if got.pid else ''}. {hint}", file=sys.stderr)
+    who = [f"pid {got.pid}"] if got.pid else []
+    if got.elsewhere:
+        who.append("maybe another account's")
+    detail = f" ({', '.join(who)})" if who else ""
+    print(f"{what}: Louver is already running{detail}. {hint}", file=sys.stderr)
     return None
 
 
-def _url(cfg: dict, path: str) -> str:
-    return f"http://{cfg['listen']}{path}"
-
-
-def _api(cfg: dict, path: str, body: dict | None = None):
-    data = None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(_url(cfg, path), data=data, method="GET" if body is None else "PUT")
-    req.add_header("Content-Type", "application/json")
-    req.add_header("X-Louver", "1")
-    with urllib.request.urlopen(req, timeout=5) as r:
-        return json.loads(r.read())
+def _api(args, path: str, body: dict | None = None):
+    return apiclient.call(path, body, sock_path=args.socket, timeout=5)
 
 
 def cmd_daemon(args, cfg: dict, path: Path) -> int:
@@ -88,11 +80,13 @@ def cmd_daemon(args, cfg: dict, path: Path) -> int:
         from .mbfans import MotherboardFans
 
         ctrl = Controller(cfg, path, SensorHub(), mbfans=MotherboardFans())
+    sock = args.socket or apiclient.socket_path()
     try:
-        httpd = serve(ctrl, args.listen or cfg["listen"])
+        httpd = serve(ctrl, sock)
     except OSError as e:
-        print(f"louver daemon: cannot listen on {args.listen or cfg['listen']}: {e.strerror or e}", file=sys.stderr)
-        return ALREADY_RUNNING if e.errno == 98 else 1  # EADDRINUSE
+        where = f" ({e.filename})" if e.filename and e.filename != str(sock) else ""
+        print(f"louver daemon: cannot serve on {sock}: {e.strerror or e}{where}", file=sys.stderr)
+        return ALREADY_RUNNING if e.errno == errno.EADDRINUSE else 1
     if not args.demo:  # only once we're really the running copy
         from . import autostart
 
@@ -107,11 +101,11 @@ def cmd_daemon(args, cfg: dict, path: Path) -> int:
 
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    logging.info("UI at http://%s/", args.listen or cfg["listen"])
+    logging.info("API at %s", sock)
     try:
         ctrl.run_forever(stop)
     finally:
-        httpd.shutdown()
+        httpd.stop()
         ctrl.shutdown()
     return 0
 
@@ -122,52 +116,35 @@ def cmd_app(args, cfg: dict, path: Path) -> int:
     except (ImportError, ValueError) as e:
         print(f"desktop app needs GTK3, WebKit2GTK 4.1 and AyatanaAppIndicator (python3-gi): {e}", file=sys.stderr)
         return 1
-    return gui.run(_url(cfg, "/"), ["--autostart"] if args.autostart else [])
+    return gui.run(args.socket or apiclient.socket_path(), ["--autostart"] if args.autostart else [])
 
 
 def cmd_ui(args, cfg: dict, path: Path) -> int:
     try:
-        import gi  # noqa: F401  (desktop app available?)
+        import gi
 
-        # Keep -I (the packaged /usr/bin/louver): without it, run from a
-        # checkout, -m would start the checkout's copy instead.
-        isolated = ["-I"] if sys.flags.isolated else []
-        subprocess.Popen(
-            [sys.executable, *isolated, "-m", "louver", "app"],
-            start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return 0
-    except ImportError:
-        pass
-    url = _url(cfg, "/")
-    for browser in (
-        "google-chrome",
-        "google-chrome-stable",
-        "chromium",
-        "chromium-browser",
-        "brave-browser",
-        "microsoft-edge",
-    ):
-        exe = shutil.which(browser)
-        if exe:
-            subprocess.Popen(
-                [exe, f"--app={url}", "--class=louver"],
-                start_new_session=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return 0
-    subprocess.Popen(["xdg-open", url], start_new_session=True)
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("WebKit2", "4.1")
+    except (ImportError, ValueError) as e:
+        print(f"louver ui: the desktop app needs GTK3 and WebKit2GTK 4.1 (python3-gi): {e}", file=sys.stderr)
+        return 1
+    # Keep -I (the packaged /usr/bin/louver): without it, run from a
+    # checkout, -m would start the checkout's copy instead.
+    isolated = ["-I"] if sys.flags.isolated else []
+    subprocess.Popen(
+        [sys.executable, *isolated, "-m", "louver", "app"],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     return 0
 
 
 def cmd_status(args, cfg: dict, path: Path) -> int:
     try:
-        st = _api(cfg, "/api/state")
-    except (urllib.error.URLError, OSError) as e:
-        print(f"daemon not reachable at {cfg['listen']}: {e}", file=sys.stderr)
+        st = _api(args, "/api/state")
+    except (OSError, ValueError, apiclient.ApiError) as e:
+        print(f"louver status: {e}", file=sys.stderr)
         return 1
     hub = st["hub"]
     print(f"{hub['name']}: {'connected' if hub['connected'] else 'NOT connected'} {hub['firmware']}")
@@ -188,11 +165,15 @@ def cmd_status(args, cfg: dict, path: Path) -> int:
 
 
 def cmd_set(args, cfg: dict, path: Path) -> int:
-    live = _api(cfg, "/api/config")
-    g = live["hub"]["groups"][args.port - 1]
-    g["mode"] = "manual"
-    g["manual_percent"] = args.percent
-    _api(cfg, "/api/config", live)
+    try:
+        live = _api(args, "/api/config")
+        g = live["hub"]["groups"][args.port - 1]
+        g["mode"] = "manual"
+        g["manual_percent"] = args.percent
+        _api(args, "/api/config", live)
+    except (OSError, ValueError, apiclient.ApiError) as e:
+        print(f"louver set: {e}", file=sys.stderr)
+        return 1
     print(f"port {args.port}: manual {args.percent}%")
     return 0
 
@@ -367,14 +348,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--config", type=Path, default=None, help="config file (default ~/.config/louver/config.json)")
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="cmd", required=True)
+    sock_help = f"the daemon's API socket (default {apiclient.socket_path()})"
     d = sub.add_parser("daemon")
-    d.add_argument("--listen", default=None)
+    d.add_argument(
+        "--socket",
+        type=Path,
+        default=None,
+        help=sock_help + ", in a directory only you can write to; give --demo another to run beside the service",
+    )
     d.add_argument("--demo", action="store_true", help="simulate the hub, Strimer and motherboard (no hardware access)")
     sub.add_parser("ui")
     a = sub.add_parser("app")
     a.add_argument("--autostart", action="store_true", help="launched at login: honour 'start minimized'")
-    sub.add_parser("status")
+    a.add_argument("--socket", type=Path, default=None, help=sock_help)
+    st = sub.add_parser("status")
+    st.add_argument("--socket", type=Path, default=None, help=sock_help)
     s = sub.add_parser("set")
+    s.add_argument("--socket", type=Path, default=None, help=sock_help)
     s.add_argument("port", type=int, choices=range(1, 5))
     s.add_argument("percent", type=int, choices=range(0, 101), metavar="PERCENT")
     sub.add_parser("probe")

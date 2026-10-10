@@ -29,8 +29,11 @@ library and talks to the controllers directly through `/dev/hidraw*`.
 **Motherboard fan headers** (Nuvoton nct67xx / ITE it87 boards)
 - Each header is opt-in and starts on **BIOS control**; pick a mode to let Louver drive it with the same presets and curves.
 - Whenever Louver stops, every header it drove goes back to the BIOS's own curve.
+- **Never below N%** sets a header's own minimum speed, which holds in every mode Louver drives it in, manual
+  included (the failsafe's 100% still wins).
+- Tick **Pump on this header** for a pump: Louver then offers only BIOS control or Full, and the
+  tray and the config file can't set anything slower either.
 - `louver mb-list` shows the headers; `louver mb-test N PCT` runs one at a set speed for 10 s and then hands it back.
-- Keep pump headers on BIOS control.
 
 **Lighting**
 - **Themes:** Rainbow Wave, Ocean, Sunset, Cyberpunk, Arctic, Inferno,
@@ -126,7 +129,9 @@ systemctl --user enable --now louver
 ```
 
 The package brings the desktop app's dependencies and the udev rule. Upgrading
-restarts the service on the new version for logged-in users. `sudo apt remove louver`
+restarts the service on the new version for logged-in users; if the Louver app is open,
+close its window, choose Quit from its tray icon and open it again, as the open window
+still runs the old version. `sudo apt remove louver`
 stops it for them and removes the code; your config in `~/.config/louver` stays. If
 you won't reinstall, run `systemctl --user disable louver` before removing it: once
 the package is gone, `systemctl --user disable` can no longer remove the
@@ -147,12 +152,24 @@ a window plus a tray icon (GTK3, WebKit2GTK 4.1 and AyatanaAppIndicator via
 Ubuntu). **Settings → Application** has start on login, start minimized,
 and minimize to tray on close. The tray icon only appears while the window
 is closed. Quitting the app never stops
-fan control: that's the `louver` service. The UI is
-served on `http://127.0.0.1:47321/` and only accepts connections from this machine.
+fan control: that's the `louver` service.
+
+There's no network port. The service serves its API and the UI on a Unix socket,
+`$XDG_RUNTIME_DIR/louver/api.sock`, in a directory only your account can open, so
+other accounts, containers and web pages can't reach it. The app shows the UI from a
+`louver://app/` address that it hands to that socket; `louver status` and `louver set`
+use it too. There's no browser version: `louver ui` needs the desktop app's packages.
 
 Only one copy runs at a time. Opening the app again brings the existing window
-forward. A second `louver daemon` (or `probe` / `mb-test` while the service is up)
-exits with a message naming the running copy, so two processes never fight over the hub.
+forward. A second `louver daemon` (or `probe` / `aura-probe` / `mb-test` while the
+service is up) exits with a message naming the running copy, so two processes never
+fight over the hub. With the Debian package that holds across accounts too, for
+members of `plugdev`: the lock is in `/run/louver`, which only `plugdev` can open (the
+group that can drive the hub and the fan headers anyway). The per-user install, or an
+account outside `plugdev`, gets the per-account check only. That's also why the service
+is enabled per user and never globally: a global enable would start it in the login
+screen's session as well, whose account usually isn't in `plugdev`, so the two would
+fight over the fans.
 
 To keep fan control running when nobody is logged in: `loginctl enable-linger $USER`.
 
@@ -174,7 +191,11 @@ louver aura-probe       ASUS Aura motherboard RGB: firmware and channels (read-o
 louver ram-probe        Corsair DDR5 RAM RGB: what the louver-ram helper found on the SMBus
 louver status           live state from the running daemon
 louver set 2 60         port 2 to a fixed 60%
-louver daemon --demo    simulated hub, Strimer and motherboard, for trying the UI without hardware
+louver daemon --demo --socket /tmp/demo/api.sock
+                        simulated hub, Strimer and motherboard, for trying the UI without hardware;
+                        its own --socket lets it run beside the service; louver app --socket (the
+                        same path) shows it, when the app isn't already open. Give --socket a
+                        directory only you can write to
 ```
 
 ## Config
