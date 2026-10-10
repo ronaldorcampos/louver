@@ -6,6 +6,7 @@ louver ui                open the desktop app (falls back to a browser window)
 louver status            show RPM / duty / temps from the running daemon
 louver set PORT PERCENT  put a port in manual mode at PERCENT (via daemon)
 louver probe             read-only hardware check, no daemon needed
+louver aura-probe        ASUS Aura motherboard RGB: firmware and channels (read-only)
 louver mb-list           motherboard fan headers: RPM, PWM, mode (read-only)
 louver mb-test N PCT     run motherboard header N at PCT for a few seconds, then hand it back to BIOS
 """
@@ -24,8 +25,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from . import aura, instance
 from . import config as cfgmod
-from . import instance
 from .devices import DRIVERS, VENDOR_ID, StrimerPlus, UniHubALV2
 from .hidraw import HidrawTransport, enumerate_hidraw
 
@@ -64,10 +65,14 @@ def cmd_daemon(args, cfg: dict, path: Path) -> int:
         if lock is None:
             return ALREADY_RUNNING
     if args.demo:
-        from .sim import open_sim, sim_motherboard
+        from .sim import SimAuraAccess, open_sim, sim_motherboard
 
-        # Demo never touches real hardware or the real config file.
-        ctrl = Controller(cfg, None, SensorHub(), opener=open_sim, mbfans=sim_motherboard())
+        # Demo never touches real hardware or the real config file, so it
+        # can show the simulated motherboard RGB without asking.
+        cfg = {**cfg, "motherboard_rgb": {**cfg["motherboard_rgb"], "enabled": True}}
+        ctrl = Controller(
+            cfg, None, SensorHub(), opener=open_sim, mbfans=sim_motherboard(), aura_access=SimAuraAccess()
+        )
     else:
         from .mbfans import MotherboardFans
 
@@ -217,6 +222,54 @@ def cmd_probe(args, cfg: dict, path: Path) -> int:
     return rc
 
 
+def cmd_aura_probe(args, cfg: dict, path: Path) -> int:
+    """Read-only: the Aura controller's firmware and config table. Sends only
+    the two query commands (firmware version, config table)."""
+    lock = _hardware_lock(
+        "louver aura-probe",
+        "Stop the service first (systemctl --user stop louver), or see Settings → Motherboard RGB in the app.",
+    )
+    if lock is None:
+        return ALREADY_RUNNING
+    rc = 1
+    for info in aura.find_controllers():
+        print(f"{info.devnode}  {info.vid:04x}:{info.pid:04x}  {info.name}")
+        try:
+            dev = aura.AuraMainboard(HidrawTransport(info.devnode))
+        except OSError as e:
+            print(f"  cannot open: {e}")
+            continue
+        try:
+            try:
+                print(f"  firmware {dev.read_firmware()}")
+            except TimeoutError:
+                print("  firmware: no reply")
+            channels = dev.read_config()
+            print("  config table:")
+            for i in range(0, len(dev.config_table), 6):
+                print("    " + dev.config_table[i : i + 6].hex(" "))
+            for ch in channels:
+                if ch.kind == "argb":
+                    what = "LED count not reported by the controller"
+                elif ch.rgb_headers:
+                    what = f"{ch.num_leds} LEDs, {ch.rgb_headers} of them 12 V RGB headers"
+                else:
+                    what = f"{ch.num_leds} LEDs"
+                if not dev.fits(ch.index):
+                    what += "; its effect colour doesn't fit one report, so Louver skips it"
+                print(f"  {ch.key:<8} {ch.name:<14} effect channel {ch.effect_channel}  {what}")
+            if not channels:
+                print("  no channels in the config table")
+            rc = 0
+        except OSError as e:
+            print(f"  query failed: {e}")
+        finally:
+            dev.close()
+    if rc:
+        print("no usable ASUS Aura motherboard RGB controller found", file=sys.stderr)
+    return rc
+
+
 def cmd_mb_list(args, cfg: dict, path: Path) -> int:
     from .mbfans import MotherboardFans
 
@@ -273,7 +326,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     d = sub.add_parser("daemon")
     d.add_argument("--listen", default=None)
-    d.add_argument("--demo", action="store_true", help="simulate the hub and Strimer (no hardware access)")
+    d.add_argument("--demo", action="store_true", help="simulate the hub, Strimer and motherboard (no hardware access)")
     sub.add_parser("ui")
     a = sub.add_parser("app")
     a.add_argument("--autostart", action="store_true", help="launched at login: honour 'start minimized'")
@@ -282,6 +335,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("port", type=int, choices=range(1, 5))
     s.add_argument("percent", type=int, choices=range(0, 101), metavar="PERCENT")
     sub.add_parser("probe")
+    sub.add_parser("aura-probe")
     sub.add_parser("mb-list")
     t = sub.add_parser("mb-test")
     t.add_argument("header", type=int)
@@ -303,6 +357,7 @@ def main(argv: list[str] | None = None) -> int:
         "status": cmd_status,
         "set": cmd_set,
         "probe": cmd_probe,
+        "aura-probe": cmd_aura_probe,
         "app": cmd_app,
         "mb-list": cmd_mb_list,
         "mb-test": cmd_mb_test,

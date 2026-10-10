@@ -44,6 +44,7 @@ def test_contents(deb):
     for p in (
         "/usr/bin/louver",
         "/usr/lib/python3/dist-packages/louver/__main__.py",
+        "/usr/lib/python3/dist-packages/louver/aura.py",
         "/usr/lib/python3/dist-packages/louver/web/index.html",
         "/usr/lib/python3/dist-packages/louver/web/fonts/unbounded.woff2",
         "/usr/lib/systemd/user/louver.service",
@@ -65,8 +66,21 @@ def test_installed_files_point_at_the_system_copy(deb, tmp_path):
     assert "ExecStart=/usr/bin/louver daemon\n" in unit
     assert "PYTHONPATH" not in unit and ".local" not in unit
     copyright = (root / "usr/share/doc/louver/copyright").read_text()
-    assert "Files: louver/devices.py" in copyright and "2026 sgtaziz" in copyright  # see NOTICE
-    assert "Permission is hereby granted" in copyright and "SIL OPEN FONT LICENSE" in copyright
+    assert "Files: *\nCopyright: 2026 Ronaldo Campos\nLicense: GPL-2+\n" in copyright
+    assert "License: GPL-2+\n This program is free software" in copyright
+    assert "`/usr/share/common-licenses/GPL-2'" in copyright
+    # lian-li-linux's MIT notice stays with the drivers that follow it (see NOTICE).
+    assert "Files: louver/devices.py" in copyright and "2026 sgtaziz" in copyright
+    assert "License: GPL-2+ and MIT" in copyright
+    assert "License: MIT\n Permission is hereby granted" in copyright and "SIL OPEN FONT LICENSE" in copyright
+    assert copyright.rstrip().endswith("SOFTWARE.")  # the MIT text ends where its notice in NOTICE does
+    # The Aura driver is a port of OpenRGB's, at a pinned commit.
+    aura = copyright.split("Files: louver/aura.py\n", 1)[1].split("\n\n", 1)[0]
+    assert "Martin Hartl" in aura and "Adam Honse" in aura and "License: GPL-2+" in aura
+    assert re.search(r"Comment: A port of OpenRGB's .*\n .*\n [0-9a-f]{40}; see NOTICE\.", aura)
+    assert "MIT" not in copyright.split("Files: louver/devices.py", 1)[0]  # Files: * is no longer MIT
+    rules = (root / "usr/lib/udev/rules.d/70-louver.rules").read_text()
+    assert 'ATTRS{idVendor}=="0b05", ATTRS{idProduct}=="19af"' in rules
     wrapper = root / "usr/bin/louver"
     assert wrapper.stat().st_mode & 0o777 == 0o755
     assert "/usr/bin/python3 -I -m louver" in wrapper.read_text()

@@ -11,7 +11,7 @@ from louver.curves import Governor, interpolate, normalize
 from louver.daemon import Controller, serve
 from louver.devices import StrimerPlus, UniHubALV2
 
-from .fakes import HUB_RESPONSES, STRIMER_RESPONSES, FakeSensors, FakeTransport, Z
+from .fakes import HUB_RESPONSES, STRIMER_RESPONSES, FakeAuraAccess, FakeAuraTransport, FakeSensors, FakeTransport, Z
 
 
 # ---------------- curves ----------------
@@ -54,13 +54,19 @@ def test_save_load_roundtrip(tmp_path):
 
 # ---------------- controller ----------------
 class Rig:
-    def __init__(self, cfg=None, temps=None):
+    def __init__(self, cfg=None, temps=None, aura_access=None):
         self.hub_t = FakeTransport(HUB_RESPONSES)
         self.str_t = FakeTransport(STRIMER_RESPONSES)
+        # The motherboard's Aura controller: opened only with motherboard_rgb
+        # on; each open gets whatever aura_t is at the time.
+        self.aura_t = FakeAuraTransport()
+        self.aura = aura_access if aura_access is not None else FakeAuraAccess(lambda: self.aura_t)
         self.now = 0.0
         self.opens = 0
         self.sensors = FakeSensors(temps if temps is not None else {"cpu": 50.0})
-        self.ctrl = Controller(cfg or {}, None, self.sensors, opener=self.open, clock=lambda: self.now)
+        self.ctrl = Controller(
+            cfg or {}, None, self.sensors, opener=self.open, clock=lambda: self.now, aura_access=self.aura
+        )
 
     def open(self, skip=frozenset()):
         self.opens += 1

@@ -80,13 +80,24 @@ Files: *
 COPY
   ours="$(sed -n 's/^Copyright (c) //p' "$here/LICENSE")"
   echo "Copyright: $ours"
-  echo "License: MIT"
+  echo "License: GPL-2+"
   echo
-  # The drivers follow lian-li-linux's Rust implementation (see NOTICE).
+  # The Lian Li drivers follow lian-li-linux's Rust implementation (see NOTICE).
   echo "Files: louver/devices.py"
   echo "Copyright: $ours"
   echo "           $(sed -n 's/^ *Copyright (c) \(.*sgtaziz\).*/\1/p' "$here/NOTICE" | head -1)"
-  echo "License: MIT"
+  echo "License: GPL-2+ and MIT"
+  echo "Comment: Follows lian-li-linux (https://github.com/sgtaziz/lian-li-linux), MIT."
+  echo
+  echo "Files: louver/aura.py"
+  echo "Copyright: 2020 Martin Hartl (inlart)"
+  echo "           2020 Adam Honse (CalcProgrammer1)"
+  echo "           other OpenRGB contributors"
+  echo "           $ours"
+  echo "License: GPL-2+"
+  echo "Comment: A port of OpenRGB's Aura USB mainboard driver"
+  echo " (https://gitlab.com/CalcProgrammer1/OpenRGB) at commit"
+  echo " $(sed -n 's/^OPENRGB_COMMIT = "\([0-9a-f]*\)"$/\1/p' "$here/louver/aura.py"); see NOTICE."
   echo
   echo "Files: louver/web/fonts/*"
   echo "Copyright: $(sed -n '1s/^Copyright //p' "$here/louver/web/fonts/LICENSE-unbounded.txt")"
@@ -94,8 +105,26 @@ COPY
   echo "License: OFL-1.1"
   indent <(sed '1,2d' "$here/louver/web/fonts/LICENSE-unbounded.txt")
   echo
+  cat <<'GPL'
+License: GPL-2+
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; either version 2 of the License, or
+ (at your option) any later version.
+ .
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ .
+ On Debian systems, the full text of the GNU General Public
+ License version 2 can be found in the file
+ `/usr/share/common-licenses/GPL-2'.
+
+GPL
   echo "License: MIT"
-  indent <(sed '1,4d' "$here/LICENSE")  # the permission text, without our copyright line
+  # lian-li-linux's permission text (NOTICE), without its copyright line
+  indent <(sed -n '/^Permission is hereby granted/,/^SOFTWARE\.$/p' "$here/NOTICE")
 } > "$root/usr/share/doc/louver/copyright"
 
 find "$root" -type d -exec chmod 755 {} +

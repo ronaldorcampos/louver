@@ -3,6 +3,16 @@
 # plugdev group read/write on their hidraw nodes so Louver runs without root.
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0cf2", ATTRS{idProduct}=="a10[0-6]|a200", MODE="0660", GROUP="plugdev", TAG+="uaccess"
 
+# ASUS Aura LED Controller: the motherboard's RGB (ARGB headers and onboard
+# LEDs) on Aura USB boards, the mainboard product IDs OpenRGB drives. One rule
+# per product ID: never all of ASUS's 0b05, which also covers keyboards, mice
+# and other devices. Louver only opens it with motherboard RGB turned on.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0b05", ATTRS{idProduct}=="18f3", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0b05", ATTRS{idProduct}=="1939", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0b05", ATTRS{idProduct}=="19af", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0b05", ATTRS{idProduct}=="1aa6", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0b05", ATTRS{idProduct}=="1bed", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
 # Motherboard fan headers (Nuvoton nct67xx / ITE it87 Super I/O): let the
 # plugdev group write pwmN and pwmN_enable so Louver can drive the headers
 # you opt in. Headers left on "BIOS control" are never touched.

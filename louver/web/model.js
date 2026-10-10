@@ -127,6 +127,42 @@ function strimerPortPreview(L, meta, port, count) {
   return c.slice(0, spec.max_colors);
 }
 
+// Motherboard RGB (the ASUS Aura controller): a channel's look is its own
+// entry under per-channel control, else the shared one (daemon._aura_look).
+function auraLook(cfg, key) {
+  const m = cfg.motherboard_rgb;
+  return (m.per_channel && m.channels[key]) || m.lighting;
+}
+// Aura effects take one colour or none; Red Pulse's built-in colour is known.
+const AURA_BUILTIN = { "Red Pulse": ["#ff0000"] };
+function auraPreview(L, meta) {
+  if (!L || L.mode === "Off") return [OFF];
+  const spec = (meta.aura_lighting_modes || []).find((m) => m.name === L.mode);
+  if (spec && spec.max_colors) return colorsOf(L).slice(0, 1);
+  return AURA_BUILTIN[L.mode] || RAINBOW;
+}
+// The sidebar's one bar: the shared look if every channel has it, else each
+// channel's first colour. channels: state.motherboard_rgb.channels.
+function auraBar(cfg, meta, channels) {
+  if (!channels.length) return [OFF];
+  const looks = channels.map((ch) => auraLook(cfg, ch.key));
+  if (looks.every((L) => JSON.stringify(L) === JSON.stringify(looks[0]))) return auraPreview(looks[0], meta);
+  return looks.map((L) => auraPreview(L, meta)[0]);
+}
+// A channel's subtitle. The config table counts the onboard LEDs, never the
+// LEDs on an ARGB header.
+function auraDetail(ch) {
+  if (ch.kind !== "onboard") return "LED count not reported";
+  const n = `${ch.leds} LED${ch.leds === 1 ? "" : "s"}`;
+  return ch.rgb_headers ? `${n} · ${ch.rgb_headers} of them 12 V RGB header${ch.rgb_headers === 1 ? "" : "s"}` : n;
+}
+// Channels Louver drives: the daemon notes, and skips, any whose effect
+// colour doesn't fit one report.
+const auraUsable = (channels) => (channels || []).filter((ch) => !ch.note);
+// "ARGB header 4 (why)" for each skipped channel, or "" if none.
+const auraSkipped = (channels) => (channels || []).filter((ch) => ch.note).map((ch) => `${ch.name} (${ch.note})`).join(", ");
+const auraShown = (state) => !!(state && state.motherboard_rgb && state.motherboard_rgb.enabled && state.motherboard_rgb.connected);
+
 // The motherboard's own ARGB effect: we can't see it, so show a neutral pattern.
 const MB_LIGHT = "repeating-conic-gradient(var(--muted) 0 22.5deg, var(--panel-2) 0 45deg)";
 const ringCss = (cols) => (cols == null ? MB_LIGHT : cols.length === 1 ? cols[0] : `conic-gradient(${[...cols, cols[0]].join(", ")})`);
@@ -136,7 +172,7 @@ const barCss = (cols) => (cols == null ? MB_LIGHT : cols.length === 1 ? cols[0] 
 const visiblePorts = (cfg) => cfg.hub.groups.map((g, i) => [g, i]).filter(([g]) => g.fans > 0 || cfg.ui.show_empty_ports);
 const mbCfg = (cfg, index) => cfg.motherboard.headers.find((x) => x.index === index);
 const sameZone = (a, b) => !!a && !!b && a.kind === b.kind && a.i === b.i;
-const zoneKey = (z) => (z.kind === "strimer" ? "strimer" : `${z.kind}-${z.i}`);
+const zoneKey = (z) => (z.kind === "strimer" || z.kind === "aura" ? z.kind : `${z.kind}-${z.i}`);
 
 // Motherboard headers show up once something spins on them or you've set them
 // up. zeroRuns[index] counts polls in a row at 0 rpm (missing = never seen
@@ -154,6 +190,8 @@ function zones(cfg, state, { zeroRuns = {}, keep = null } = {}) {
     }
   }
   if (state && state.strimer && state.strimer.connected) z.push({ kind: "strimer", i: 0 });
+  // Motherboard RGB: only once it's turned on in Settings and the board answers.
+  if (auraShown(state)) z.push({ kind: "aura", i: 0 });
   return z;
 }
 
@@ -172,13 +210,13 @@ function validSelection(sel, zs) {
   return zs.length ? { ...zs[0] } : null;
 }
 
-// #hub-2, #mb-7, #strimer, #settings: reloads keep your place, and the tray
+// #hub-2, #mb-7, #strimer, #aura, #settings: reloads keep your place, and the tray
 // can open the window on a zone.
 function parseHash(hash) {
   const h = String(hash || "").replace(/^#/, "");
   let m;
   if (h === "settings") return { view: "settings" };
-  if (h === "strimer") return { view: "zone", sel: { kind: "strimer", i: 0 } };
+  if (h === "strimer" || h === "aura") return { view: "zone", sel: { kind: h, i: 0 } };
   if ((m = /^hub-([0-3])$/.exec(h))) return { view: "zone", sel: { kind: "hub", i: +m[1] } };
   if ((m = /^mb-([1-9]|1[0-6])$/.exec(h))) return { view: "zone", sel: { kind: "mb", i: +m[1] } };
   return null;
@@ -215,6 +253,7 @@ function speedFoot(kind, mode, s) {
 return {
   OFF, UNSET, NO_READING, RAINBOW, MB_LIGHT, MB_ZERO_GRACE, clamp, normColor, gradientAt, thermalColor,
   hubFanPreview, strimerPreview, strimerPortPreview, ringCss, barCss,
+  auraLook, auraPreview, auraBar, auraDetail, auraUsable, auraSkipped, auraShown,
   visiblePorts, mbCfg, sameZone, zoneKey, zones, nextZeroRuns, validSelection, parseHash, hashFor,
   isCorner, effectTag, speedFoot,
 };

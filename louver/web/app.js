@@ -9,7 +9,8 @@ const $ = (id) => document.getElementById(id);
 
 let cfg = null, meta = null, state = null;
 // The selected zone: a hub port (i = 0..3), a motherboard header (i = its
-// number) or the Strimer. view is "zone" or "settings".
+// number), the Strimer or the motherboard's RGB (kind "aura"). view is
+// "zone" or "settings".
 let sel = { kind: "hub", i: 2 }, view = "zone";
 let saveTimer = null, dragging = false, editSeq = 0;
 // savePending: an edit of ours hasn't reached the daemon yet. cfgRev: the
@@ -95,13 +96,19 @@ const zones = () => M.zones(cfg, state, { zeroRuns: mbZeroRuns, keep: sel });
 function zoneName(z) {
   if (z.kind === "hub") return cfg.hub.groups[z.i].name;
   if (z.kind === "mb") return mbCfg(z.i)?.name || `Header ${z.i}`;
+  if (z.kind === "aura") return "Motherboard RGB";
   return "Strimer Plus";
 }
 function zoneState(z) {
   if (z.kind === "hub") return state?.hub.groups[z.i];
   if (z.kind === "mb") return state?.motherboard.headers.find((h) => h.index === z.i);
+  if (z.kind === "aura") return state?.motherboard_rgb;
   return state?.strimer;
 }
+// The Strimer and motherboard RGB are lighting only: no speed, no duty.
+const lightOnly = (z) => z.kind === "strimer" || z.kind === "aura";
+// The channels Louver drives (skipped ones carry a note: see auraSkipped).
+const auraChannels = () => M.auraUsable(state?.motherboard_rgb?.channels);
 
 // Keep the selection on a zone that still exists (a port set to 0 fans, a
 // Strimer that was unplugged, a hash naming something that isn't there).
@@ -154,10 +161,11 @@ function strimerBar() {
 }
 const MB_BAR = barCss(null);
 // What a zone's sidebar glyph shows: a hub port's first fan, a plain fan for a
-// motherboard header, the Strimer's bar.
+// motherboard header, the Strimer's or the motherboard RGB's bar.
 function zonePreview(z) {
   if (z.kind === "hub") return M.hubFanPreview(cfg, meta, z.i, 0);
   if (z.kind === "mb") return "mb";
+  if (z.kind === "aura") return barCss(M.auraBar(cfg, meta, auraChannels()));
   return strimerBar();
 }
 
@@ -165,7 +173,7 @@ function zonePreview(z) {
 // The buttons are updated in place, keyed by zone, so the 1 s refresh can't
 // swallow a click that lands mid-rebuild or drop keyboard focus.
 function zoneButton(z) {
-  const glyph = z.kind === "strimer" ? el("span", { class: "strimer-glyph" }) : fanGlyph(null);
+  const glyph = lightOnly(z) ? el("span", { class: "strimer-glyph" }) : fanGlyph(null);
   return el("button", { class: "zone", "data-zone": zoneKey(z) },
     el("span", { class: "zname" }, el("b"), el("small")), el("i", { class: "zwarn hidden" }), glyph);
 }
@@ -173,13 +181,17 @@ function fillZoneButton(b, z) {
   const s = zoneState(z);
   let sub;
   if (z.kind === "strimer") sub = `${s.ports} ports`;
+  else if (z.kind === "aura") {
+    const n = auraChannels().length;
+    sub = `${n} channel${n === 1 ? "" : "s"} · ASUS Aura`;
+  }
   else {
     const c = z.kind === "hub" ? cfg.hub.groups[z.i] : mbCfg(z.i) || { mode: "bios" };
     sub = (z.kind === "hub" ? `${c.fans} fan${c.fans === 1 ? "" : "s"} · ` : "") + `${s?.rpm ?? 0} rpm`
       + (c.mode === "bios" ? " · BIOS" : c.mode === "mb_sync" ? " · MB" : "");
   }
   const [label, warnEl, glyph] = b.children;
-  if (z.kind === "strimer") glyph.style.background = zonePreview(z);
+  if (lightOnly(z)) glyph.style.background = zonePreview(z);
   else setFanGlyph(glyph, zonePreview(z));
   label.children[0].textContent = zoneName(z);
   label.children[1].textContent = sub;
@@ -220,14 +232,16 @@ function renderThemes() {
 }
 
 function renderStatus() {
-  const h = state.hub, s = state.strimer, m = state.motherboard;
+  const h = state.hub, s = state.strimer, m = state.motherboard, a = state.motherboard_rgb;
   const row = (name, detail, status, cls = "") => el("div", { class: "dev" },
     el("span", {}, el("b", {}, name), el("small", {}, detail)), el("i", { class: cls }, "● " + status));
   const linked = (d) => (d.connected ? ["firmware " + (d.firmware || "?"), "linked"] : ["not connected", "offline", "off"]);
   $("devices").replaceChildren(
     row("UNI HUB AL V2", ...linked(h)),
     row("Strimer Plus", ...linked(s)),
-    ...(m?.present ? [row("Motherboard", m.chip, ...(m.error ? ["error", "bad"] : m.writable ? ["control"] : ["read-only", "off"]))] : []));
+    ...(m?.present ? [row("Motherboard", m.chip, ...(m.error ? ["error", "bad"] : m.writable ? ["control"] : ["read-only", "off"]))] : []),
+    ...(a?.enabled ? [row("Motherboard RGB", ...(a.error ? ["ASUS Aura", "error", "bad"] : linked(a)))] : []));
+  renderAuraStatus();
   const b = $("banner");
   const msg = state.error || (!h.connected ? "UNI HUB not connected — check the USB cable and the udev rule (see README)." : "")
     || (onZone() && sel.kind === "mb" ? m?.error || (m && !m.writable ? "Read-only: install the hwmon udev rule (README) to control motherboard headers." : "") : "");
@@ -251,8 +265,11 @@ gillRow($("empty-gills"), 7, 72);  // resting gills, drawn once
 function renderZoneHead() {
   const z = sel, name = $("zone-name");
   name.value = zoneName(z);
-  name.disabled = z.kind === "strimer";
-  if (z.kind === "hub") {
+  name.disabled = lightOnly(z);
+  if (z.kind === "aura") {
+    const a = state?.motherboard_rgb, n = auraChannels().length;
+    $("zone-sub").textContent = `${n} channel${n === 1 ? "" : "s"} · firmware ${a?.firmware || "?"} · ${a?.name || "ASUS Aura"}`;
+  } else if (z.kind === "hub") {
     const n = cfg.hub.groups[z.i].fans;
     $("zone-sub").textContent = `${n} fan${n === 1 ? "" : "s"} · hub port ${z.i + 1} · UNI HUB AL V2`;
   } else if (z.kind === "mb") {
@@ -266,8 +283,8 @@ function renderZoneHead() {
 
 function renderZoneStats() {
   const box = $("zone-stats");
-  $("duty-meter").classList.toggle("hidden", sel.kind === "strimer");
-  if (sel.kind === "strimer") { box.replaceChildren(); return; }
+  $("duty-meter").classList.toggle("hidden", lightOnly(sel));
+  if (lightOnly(sel)) { box.replaceChildren(); return; }
   const s = zoneState(sel) || {};
   const c = selCfg();
   const sensor = meta.sensors.find((x) => x.id === c.sensor);
@@ -359,9 +376,10 @@ function renderZoneFans() {
   }
 }
 
-// Hub ports have Speed and Lighting tabs; a header is speed only, the Strimer lighting only.
+// Hub ports have Speed and Lighting tabs; a header is speed only, the Strimer
+// and motherboard RGB lighting only.
 let tab = "speed";
-const shownTab = () => (sel.kind === "mb" ? "speed" : sel.kind === "strimer" ? "light" : tab);
+const shownTab = () => (sel.kind === "mb" ? "speed" : lightOnly(sel) ? "light" : tab);
 function renderZone() {
   renderZoneHead();
   const t = shownTab();
@@ -404,7 +422,7 @@ function fitName() {
 $("zone-name").addEventListener("input", fitName);
 window.addEventListener("resize", () => { if (onZone()) { fitName(); if (hasSpeed() && !dragging) drawCurve(); } });
 $("zone-name").addEventListener("change", (e) => {
-  if (!sel || sel.kind === "strimer") return;
+  if (!sel || lightOnly(sel)) return;
   selCfg().name = e.target.value || (sel.kind === "hub" ? `Port ${sel.i + 1}` : `Header ${sel.i}`);
   save(0); renderZoneList();
 });
@@ -423,7 +441,7 @@ function mbEntry(index) {
 }
 const selCfg = () => (sel.kind === "hub" ? cfg.hub.groups[sel.i] : mbEntry(sel.i));
 const selState = () => zoneState(sel);
-const hasSpeed = () => onZone() && sel.kind !== "strimer";
+const hasSpeed = () => onZone() && !lightOnly(sel);
 
 function renderSpeed() {
   const g = selCfg();
@@ -813,6 +831,7 @@ function editLight({ rerender = true, delay = 0 } = {}) {
 // ---------------- lighting ----------------
 function renderLighting() {
   const tools = $("light-tools"), box = $("light-controls"), fx = $("light-effects"), hint = $("mbsync-hint");
+  if (sel.kind === "aura") { renderAuraLighting(tools, box, fx, hint); return; }
   if (sel.kind === "hub") {
     const i = sel.i, synced = cfg.hub.mb_rgb_sync;
     tools.replaceChildren(
@@ -870,6 +889,71 @@ function renderLighting() {
   renderZoneFans();
 }
 
+// ---- motherboard RGB: the Aura controller's own effects, one look or one per channel ----
+// One panel: a bar per channel it covers, the effect chips, the colour.
+function auraPanel(title, sub, L, chans, set, alt) {
+  const modes = meta.aura_lighting_modes;
+  const spec = modes.find((m) => m.name === L.mode) || { name: L.mode, max_colors: 0 };
+  const bars = el("div", { class: "port-bars" }, ...chans.map((ch) => {
+    const b = el("span", { title: ch.name });
+    b.style.background = barCss(M.auraPreview(M.auraLook(cfg, ch.key), meta));
+    return b;
+  }));
+  return el("section", { class: "panel" + (alt ? " alt" : "") },
+    el("div", { class: "panel-head" }, el("h2", {}, title, el("small", {}, " · " + sub))),
+    el("div", { class: "preview" }, bars),
+    el("div", { class: "chips", role: "group", "aria-label": title + " effect" }, ...modes.map((m) => el("button", {
+      class: "chip" + (m.name === L.mode ? " on" : ""), "aria-pressed": String(m.name === L.mode), title: M.effectTag("aura", m),
+      onclick: () => set({ mode: m.name }),
+    }, m.name))),
+    spec.max_colors
+      ? field("Colour", colorInputs(L.colors, 1, () => "Colour", (c) => set({ colors: c.slice(0, 1) })))
+      : field("Colour", el("span", { class: "none" }, L.mode === "Off" ? "LEDs off" : "This effect uses built-in colours")));
+}
+
+function renderAuraLighting(tools, box, fx, hint) {
+  const m = cfg.motherboard_rgb, chans = auraChannels(), skipped = M.auraSkipped(state?.motherboard_rgb?.channels);
+  hint.textContent = skipped ? "Louver doesn't drive: " + skipped + ". The board's config table describes more than one effect report holds." : "";
+  hint.classList.toggle("hidden", !skipped);
+  box.classList.remove("hidden");
+  fx.classList.add("hidden");
+  fx.replaceChildren();
+  tools.replaceChildren(
+    toggle("Per-channel control", m.per_channel, (v) => {
+      const mr = cfg.motherboard_rgb;
+      mr.per_channel = v;
+      if (v) for (const ch of chans) mr.channels[ch.key] = JSON.parse(JSON.stringify(mr.lighting));  // start from the current look
+      editLight();
+    }),
+    el("span", { class: "hint" }, "Effects run on the board's Aura controller. Not saved to the board: after a restart it shows its own until Louver starts."));
+  if (!m.per_channel) {
+    box.replaceChildren(auraPanel("Every channel", `${chans.length} on this board`, m.lighting, chans, (patch) => {
+      cfg.motherboard_rgb.lighting = { ...cfg.motherboard_rgb.lighting, ...patch };
+      editLight();
+    }, false));
+    return;
+  }
+  box.replaceChildren(el("div", { class: "split" }, ...chans.map((ch, k) => auraPanel(ch.name, M.auraDetail(ch), M.auraLook(cfg, ch.key), [ch], (patch) => {
+    // Look the entry up at edit time: cfg may have been replaced by a save.
+    const mr = cfg.motherboard_rgb;
+    mr.channels[ch.key] = { ...M.auraLook(cfg, ch.key), ...patch };
+    editLight();
+  }, k % 2 === 1))));
+}
+
+// Settings: what the motherboard RGB switch is doing. Updated on every poll
+// (renderStatus), since the board shows up or fails after the switch flips.
+function renderAuraStatus() {
+  const a = state?.motherboard_rgb, on = !!cfg?.motherboard_rgb.enabled;
+  const msg = !on ? "For ASUS Aura USB boards: the ARGB headers and onboard LEDs, as the Motherboard RGB zone. While this is off, Louver never opens the board's RGB controller."
+    : a?.error ? "Motherboard RGB: " + a.error
+    : a?.connected ? `Aura controller linked · firmware ${a.firmware || "?"} · ${auraChannels().length} channels`
+      + (M.auraSkipped(a.channels) ? ` (skipped: ${M.auraSkipped(a.channels)})` : "") + ". Effects aren't saved to the board."
+    : "Looking for an ASUS Aura motherboard RGB controller… none found yet.";
+  const p = $("aura-status");
+  if (p.textContent !== msg) p.textContent = msg;
+}
+
 // ---------------- settings ----------------
 function renderSettings() {
   $("set-poll").value = cfg.poll_interval;
@@ -878,8 +962,11 @@ function renderSettings() {
   $("set-exit-pct").value = cfg.on_exit_percent;
   $("exit-pct-row").classList.toggle("hidden", cfg.on_exit !== "fixed");
   $("set-show-empty").checked = cfg.ui.show_empty_ports;
+  $("set-aura").checked = cfg.motherboard_rgb.enabled;
+  renderAuraStatus();
   document.querySelectorAll("[data-app]").forEach((inp) => { inp.checked = !!cfg.app[inp.dataset.app]; });
 }
+$("set-aura").addEventListener("change", (e) => { cfg.motherboard_rgb.enabled = e.target.checked; save(0); renderAll(); });
 document.querySelectorAll("[data-app]").forEach((inp) => inp.addEventListener("change", () => {
   cfg.app[inp.dataset.app] = inp.checked; save(0); renderSettings();
 }));

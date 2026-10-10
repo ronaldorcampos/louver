@@ -6,6 +6,8 @@ import random
 import tempfile
 from pathlib import Path
 
+from .aura import REPORT_ID as AURA_REPORT_ID
+from .aura import AuraMainboard
 from .devices import StrimerPlus, UniHubALV2
 from .mbfans import MotherboardFans
 
@@ -53,6 +55,46 @@ class SimStrimerTransport:
 
     def close(self) -> None:
         pass
+
+
+class SimAuraTransport:
+    """An Aura mainboard controller: 5 onboard LEDs (one of them a 12 V RGB
+    header) and 3 ARGB headers. Like the real one, its config table says
+    nothing about how many LEDs are on the ARGB headers."""
+
+    FIRMWARE = b"AULA3-DEMO-0001"
+
+    def __init__(self):
+        self.writes: list[bytes] = []
+        self._replies: list[bytes] = []
+
+    def write(self, data: bytes) -> None:
+        self.writes.append(bytes(data))
+        if data[1] == 0x82:
+            self._replies.append(bytes([AURA_REPORT_ID, 0x02]) + self.FIRMWARE)
+        elif data[1] == 0xB0:
+            table = bytearray(60)
+            table[0x02], table[0x1B], table[0x1D] = 3, 5, 1
+            self._replies.append(bytes([AURA_REPORT_ID, 0x30, 0, 0]) + bytes(table))
+
+    def read(self, length: int, timeout: float) -> bytes:
+        return self._replies.pop(0).ljust(length, b"\0")[:length] if self._replies else b""
+
+    def close(self) -> None:
+        pass
+
+
+class SimAuraAccess:
+    """The daemon's way to the simulated controller: always there, never re-enumerated."""
+
+    def find(self) -> str:
+        return "sim:aura"
+
+    def node_id(self, devnode: str) -> str:
+        return devnode
+
+    def open(self, devnode: str) -> AuraMainboard:
+        return AuraMainboard(SimAuraTransport())
 
 
 def open_sim(skip=frozenset()) -> dict[int, object]:

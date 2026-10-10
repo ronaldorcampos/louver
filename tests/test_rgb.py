@@ -66,8 +66,13 @@ def test_strimer_set_leds_packets():
 
 def test_every_theme_validates_and_controller_applies_it():
     for name in THEMES:
-        cfg = cfgmod.validate(apply_theme(cfgmod.validate({}), name))
+        start = cfgmod.validate({})
+        start["motherboard_rgb"]["per_channel"] = True
+        cfg = cfgmod.validate(apply_theme(start, name))
         assert cfg["theme"] == name
+        # The motherboard gets the theme too, as one look on every channel.
+        assert cfg["motherboard_rgb"]["lighting"]["mode"] == THEMES[name]["aura"]["mode"]
+        assert cfg["motherboard_rgb"]["per_channel"] is False and cfg["motherboard_rgb"]["enabled"] is False
     r = Rig()
     r.ctrl.tick()
     r.hub_t.outputs.clear()

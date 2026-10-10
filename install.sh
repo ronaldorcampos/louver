@@ -58,10 +58,18 @@ if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && pgrep -f "$app_pattern" >/dev/nu
   fi
 fi
 
-if [ ! -e /etc/udev/rules.d/99-louver.rules ]; then
+udev_rule=/etc/udev/rules.d/99-louver.rules
+udev_why=""
+if [ ! -e "$udev_rule" ]; then
+  udev_why="One step needs root - the udev rule that lets you open the hub without sudo:"
+elif ! cmp -s "$here/packaging/99-louver.rules" "$udev_rule"; then
+  # An older copy (or one we can't read): it may lack devices added since.
+  udev_why="The udev rule changed since you installed it; update it with:"
+fi
+if [ -n "$udev_why" ]; then
   cat <<MSG
 
-One step needs root - the udev rule that lets you open the hub without sudo:
+$udev_why
   sudo install -m 644 "$here/packaging/99-louver.rules" /etc/udev/rules.d/
   sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw
 MSG

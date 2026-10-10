@@ -199,3 +199,68 @@ test("speedFoot: the sensor failsafe is only promised where it exists", () => {
   assert.equal(M.speedFoot("hub", "quiet", { temp: null, percent: 100 }), "if the sensor drops out, this port runs at 100%");
   for (const mode of ["manual", "mb_sync", "bios"]) assert.equal(M.speedFoot("hub", mode, live), "", mode);
 });
+
+// ---------------- motherboard RGB (ASUS Aura) ----------------
+const AURA_META = { aura_lighting_modes: [{ name: "Off", max_colors: 0 }, { name: "Static", max_colors: 1 }, { name: "Rainbow", max_colors: 0 }, { name: "Red Pulse", max_colors: 0 }] };
+const CHANNELS = [
+  { key: "onboard", kind: "onboard", leds: 5, rgb_headers: 1 },
+  { key: "argb-1", kind: "argb", leds: null, rgb_headers: 0 },
+  { key: "argb-2", kind: "argb", leds: null, rgb_headers: 0 },
+];
+const auraCfg = (m = {}) => ({ ...cfg(), motherboard_rgb: { enabled: true, per_channel: false, lighting: { mode: "Static", colors: ["#00ff00"] }, channels: {}, ...m } });
+
+test("auraLook: per-channel entries only under per-channel control, else the shared look", () => {
+  const own = { mode: "Rainbow", colors: ["#ff0000"] };
+  assert.deepEqual(M.auraLook(auraCfg({ channels: { "argb-1": own } }), "argb-1"), { mode: "Static", colors: ["#00ff00"] });
+  const per = auraCfg({ per_channel: true, channels: { "argb-1": own } });
+  assert.equal(M.auraLook(per, "argb-1"), own);
+  assert.deepEqual(M.auraLook(per, "argb-2"), { mode: "Static", colors: ["#00ff00"] });  // like daemon._aura_look
+});
+
+test("auraPreview: one colour, built-in colours, dark", () => {
+  assert.deepEqual(M.auraPreview({ mode: "Static", colors: ["#00FF00", "#ff0000"] }, AURA_META), ["#00ff00"]);
+  assert.deepEqual(M.auraPreview({ mode: "Rainbow", colors: ["#00ff00"] }, AURA_META), M.RAINBOW);
+  assert.deepEqual(M.auraPreview({ mode: "Red Pulse", colors: ["#00ff00"] }, AURA_META), ["#ff0000"]);
+  assert.deepEqual(M.auraPreview({ mode: "Off", colors: ["#00ff00"] }, AURA_META), [M.OFF]);
+});
+
+test("auraBar: the shared look when every channel has it, else each channel's colour", () => {
+  assert.deepEqual(M.auraBar(auraCfg(), AURA_META, CHANNELS), ["#00ff00"]);
+  assert.deepEqual(M.auraBar(auraCfg({ lighting: { mode: "Rainbow", colors: ["#00ff00"] } }), AURA_META, CHANNELS), M.RAINBOW);
+  const per = auraCfg({ per_channel: true, channels: { "argb-2": { mode: "Static", colors: ["#0000ff"] } } });
+  assert.deepEqual(M.auraBar(per, AURA_META, CHANNELS), ["#00ff00", "#00ff00", "#0000ff"]);
+  assert.deepEqual(M.auraBar(auraCfg(), AURA_META, []), [M.OFF]);
+});
+
+test("auraDetail: onboard LED counts; ARGB headers aren't counted by the board", () => {
+  assert.equal(M.auraDetail(CHANNELS[0]), "5 LEDs · 1 of them 12 V RGB header");
+  assert.equal(M.auraDetail({ kind: "onboard", leds: 1, rgb_headers: 0 }), "1 LED");
+  assert.equal(M.auraDetail({ kind: "onboard", leds: 8, rgb_headers: 2 }), "8 LEDs · 2 of them 12 V RGB headers");
+  assert.equal(M.auraDetail(CHANNELS[1]), "LED count not reported");
+});
+
+test("zones: motherboard RGB only when it's on and the board answers; #aura routes to it", () => {
+  const st = (rgb) => ({ ...STATE([], true), motherboard_rgb: { channels: CHANNELS, ...rgb } });
+  const c = cfg({ fans: [0, 0, 0, 0] });
+  assert.deepEqual(M.zones(c, st({ enabled: true, connected: true })).map(M.zoneKey), ["strimer", "aura"]);
+  assert.deepEqual(M.zones(c, st({ enabled: true, connected: false })).map(M.zoneKey), ["strimer"]);
+  assert.deepEqual(M.zones(c, st({ enabled: false, connected: true })).map(M.zoneKey), ["strimer"]);
+  assert.deepEqual(M.zones(c, STATE([], true)).map(M.zoneKey), ["strimer"]);  // no motherboard_rgb in the state
+  assert.deepEqual(M.parseHash("#aura"), { view: "zone", sel: { kind: "aura", i: 0 } });
+  assert.equal(M.hashFor("zone", { kind: "aura", i: 0 }), "#aura");
+  assert.equal(M.parseHash("#aura-1"), null);
+});
+
+test("auraUsable / auraSkipped: channels the daemon noted are left out and named", () => {
+  const chans = [...CHANNELS, { key: "argb-3", name: "ARGB header 3", kind: "argb", note: "its LEDs don't fit one effect report" }];
+  assert.deepEqual(M.auraUsable(chans).map((ch) => ch.key), ["onboard", "argb-1", "argb-2"]);
+  assert.equal(M.auraSkipped(chans), "ARGB header 3 (its LEDs don't fit one effect report)");
+  assert.equal(M.auraSkipped(CHANNELS), "");
+  assert.deepEqual(M.auraUsable(undefined), []);
+});
+
+test("effectTag for Aura effects", () => {
+  assert.equal(M.effectTag("aura", { name: "Static", max_colors: 1 }), "one colour");
+  assert.equal(M.effectTag("aura", { name: "Rainbow", max_colors: 0 }), "built-in colours");
+  assert.equal(M.effectTag("aura", { name: "Off", max_colors: 0 }), "LEDs off");
+});

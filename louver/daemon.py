@@ -12,9 +12,11 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from . import aura
 from . import config as cfgmod
+from .aura import AuraMainboard, HidrawAccess
 from .curves import PRESETS, Governor, interpolate
-from .devices import DRIVERS, VENDOR_ID, LightingEffect, StrimerPlus, UniHubALV2
+from .devices import DRIVERS, VENDOR_ID, LightingEffect, StrimerPlus, UniHubALV2, parse_color
 from .hidraw import HidrawTransport, enumerate_hidraw
 from .mbfans import MotherboardFans
 from .rgbfx import SOFTWARE_MODES, render_hub_port, render_strimer_port
@@ -48,6 +50,10 @@ def open_devices(skip: frozenset[int] = frozenset()) -> dict[int, object]:
     return found
 
 
+class _AuraUnusable(Exception):
+    """The controller answered, but with nothing Louver can drive."""
+
+
 class Controller:
     def __init__(
         self,
@@ -57,6 +63,7 @@ class Controller:
         opener: Callable[[frozenset[int]], dict[int, object]] = open_devices,
         clock: Callable[[], float] = time.monotonic,
         mbfans: MotherboardFans | None = None,
+        aura_access=None,
     ):
         self.cfg = cfgmod.validate(cfg)
         # Bumped on every config change, so a window that's been open a while
@@ -77,6 +84,19 @@ class Controller:
         self.hub_firmware = ""
         self.strimer_firmware = ""
         self.error = ""
+        # The motherboard's Aura controller (vendor 0x0B05, the Aura mainboard
+        # PIDs only): found, watched and opened through aura_access, and only
+        # while motherboard RGB is turned on.
+        self.aura_access = aura_access if aura_access is not None else HidrawAccess()
+        self.aura: AuraMainboard | None = None
+        self.aura_firmware = ""
+        self.aura_error = ""
+        self.aura_notes: dict[str, str] = {}  # channel key -> why Louver doesn't drive it
+        self._aura_node = ""
+        self._aura_ident = None  # aura_access.node_id of the open controller
+        self._aura_dead = None  # node_id of a controller with nothing to drive: not retried
+        self._aura_tried = -1e9  # last connect attempt
+        self._aura_checked = -1e9  # last liveness check
         self._last_connect = -1e9
         self._last_tick: float | None = None
         self._governors = [Governor() for _ in range(4)]
@@ -120,6 +140,106 @@ class Controller:
             except OSError as e:
                 log.warning("strimer init failed: %s", e)
                 strimer.close()  # type: ignore[attr-defined]
+
+    def _tick_aura(self, now: float) -> None:
+        """Every RECONNECT_EVERY: notice an unplugged or re-enumerated
+        controller (sysfs and a stat only, no device I/O), and try to connect
+        while there's none."""
+        if not self.cfg["motherboard_rgb"]["enabled"]:
+            return
+        if self.aura is not None and now - self._aura_checked >= RECONNECT_EVERY:
+            self._aura_checked = now
+            if self.aura_access.node_id(self._aura_node) != self._aura_ident:
+                self._drop_aura(OSError(f"{self._aura_node} went away"))
+        if self.aura is None and now - self._aura_tried >= RECONNECT_EVERY:
+            self._connect_aura(now)
+
+    def _connect_aura(self, now: float) -> None:
+        self._aura_tried = now
+        try:
+            node = self.aura_access.find()
+        except OSError as e:
+            self._aura_failed(f"cannot look for it: {e}")
+            return
+        if node is None:
+            # Nothing to report beyond what aura_error already says: a drop
+            # reason stays visible until a connect, another error or a disable
+            # replaces it.
+            return
+        ident = self.aura_access.node_id(node)
+        if self._aura_dead is not None and ident == self._aura_dead:
+            return  # the same controller as last time: waiting for it to change, or for a re-enable
+        try:
+            dev = self.aura_access.open(node)
+        except OSError as e:
+            self._aura_failed(f"cannot open: {e}")
+            return
+        try:
+            self._init_aura(dev)
+        except _AuraUnusable as e:
+            self._aura_dead = ident
+            self._aura_failed(f"{e}; not retried until it's turned off and on, or the controller reappears")
+            dev.close()
+            return
+        except (OSError, ValueError) as e:
+            self._aura_failed(f"init failed: {e}")
+            dev.close()
+            return
+        log.info("opened %s at %s", AuraMainboard.NAME, node)
+        self.aura, self._aura_node, self._aura_ident = dev, node, ident
+        self._aura_checked = now
+        self.aura_error = ""
+
+    def _aura_failed(self, msg: str) -> None:
+        if msg != self.aura_error:  # retried every few seconds: log each new reason once
+            log.warning("motherboard RGB: %s", msg)
+        self.aura_error = msg
+
+    def _init_aura(self, dev: AuraMainboard) -> None:
+        # OpenRGB carries on without a firmware string; without the config
+        # table there are no channels, so that one is fatal.
+        try:
+            self.aura_firmware = dev.read_firmware()
+        except TimeoutError:
+            self.aura_firmware = ""
+        channels = dev.read_config()
+        # Check every channel before sending anything, so a table that
+        # doesn't fit never gets half its channels set.
+        notes = {ch.key: "its LEDs don't fit one effect report" for ch in channels if not dev.fits(ch.index)}
+        if len(notes) == len(channels):
+            argb = sum(ch.kind == "argb" for ch in channels)
+            onboard = sum(ch.num_leds for ch in channels if ch.kind == "onboard")
+            raise _AuraUnusable(
+                f"its config table has nothing to drive ({onboard} onboard LEDs, {argb} ARGB headers"
+                + (", none fitting one effect report)" if channels else ")")
+            )
+        self.aura_notes = notes
+        dev.set_gen1()
+        self._push_aura(dev)
+
+    @staticmethod
+    def _aura_look(m: dict, key: str) -> dict:
+        """A channel's look in a motherboard_rgb config section."""
+        return (m["channels"].get(key) if m["per_channel"] else None) or m["lighting"]
+
+    def _push_aura(self, dev: AuraMainboard, keys=None) -> None:
+        for ch in dev.channels:
+            if (keys is not None and ch.key not in keys) or ch.key in self.aura_notes:
+                continue
+            entry = self._aura_look(self.cfg["motherboard_rgb"], ch.key)
+            # OpenRGB sends black with the effects that take no colour.
+            color = parse_color(entry["colors"][0]) if entry["mode"] in aura.COLOR_MODES else (0, 0, 0)
+            dev.set_effect(ch.index, aura.MODES[entry["mode"]], color)
+
+    def _drop_aura(self, err: Exception) -> None:
+        log.warning("motherboard RGB I/O error, will reconnect: %s", err)
+        self.aura_error = f"disconnected: {err}"
+        dev, self.aura = self.aura, None
+        if dev is not None:
+            try:
+                dev.close()
+            except OSError:
+                pass
 
     def _init_hub(self, hub: UniHubALV2) -> None:
         fw = hub.read_firmware()
@@ -292,6 +412,7 @@ class Controller:
                     self._drop("hub", e)
             self._refresh_temperature_lighting()
             self._tick_motherboard(now, dt, floor)
+            self._tick_aura(now)
 
     def _tick_motherboard(self, now: float, dt: float, floor: int) -> None:
         if self.mb is None:
@@ -396,13 +517,34 @@ class Controller:
                     self._push_strimer_lighting(self.strimer)
             except OSError as e:
                 self._drop("strimer", e)
+            self._apply_aura_config(old["motherboard_rgb"], new["motherboard_rgb"])
         self.tick()
         return new
 
+    def _apply_aura_config(self, old: dict, new: dict) -> None:
+        if not new["enabled"]:
+            if self.aura is not None:  # the lights stay as they are
+                self.aura.close()
+                self.aura = None
+            self.aura_error = ""
+            self._aura_dead = None
+            return
+        if not old["enabled"]:
+            # Just turned on: try now, even on a controller that failed before.
+            # Any other save leaves retries to _tick_aura's pace.
+            self._aura_dead = None
+            self._connect_aura(self._clock())
+            return
+        if self.aura is None or old == new:
+            return
+        keys = [ch.key for ch in self.aura.channels if self._aura_look(old, ch.key) != self._aura_look(new, ch.key)]
+        try:
+            self._push_aura(self.aura, keys)
+        except OSError as e:
+            self._drop_aura(e)
+
     # --- Lighting Lab -------------------------------------------------------
     def lab_show(self, req: dict) -> None:
-        from .devices import parse_color
-
         group = int(req.get("group", 0))
         ring = req.get("ring", "inner")
         if ring not in ("inner", "outer"):
@@ -461,6 +603,25 @@ class Controller:
                     "headers": [{"index": i, **copy.deepcopy(s)} for i, s in sorted(self.mb_state.items())],
                     "error": self.mb_error,
                 },
+                "motherboard_rgb": {
+                    "enabled": self.cfg["motherboard_rgb"]["enabled"],
+                    "connected": self.aura is not None,
+                    "name": AuraMainboard.NAME,
+                    "firmware": self.aura_firmware,
+                    "channels": [
+                        {
+                            "key": ch.key,
+                            "name": ch.name,
+                            "kind": ch.kind,
+                            # ARGB headers: the config table doesn't say how many LEDs are on them.
+                            "leds": ch.num_leds if ch.kind == "onboard" else None,
+                            "rgb_headers": ch.rgb_headers,
+                            "note": self.aura_notes.get(ch.key, ""),  # set: Louver doesn't drive it
+                        }
+                        for ch in (self.aura.channels if self.aura else [])
+                    ],
+                    "error": self.aura_error,
+                },
                 "error": self.error,
                 "config_rev": self.cfg_rev,
             }
@@ -469,6 +630,9 @@ class Controller:
         with self.lock:
             if self.mb is not None:
                 self.mb.release_all()  # BIOS curves take back over
+            if self.aura is not None:  # its lights stay as they are
+                self.aura.close()
+                self.aura = None
             if self.strimer is not None:
                 self.strimer.close()
                 self.strimer = None
@@ -512,6 +676,7 @@ def meta(ctrl: Controller) -> dict:
         "presets": PRESETS,
         "hub_lighting_modes": UniHubALV2.lighting_modes() + _SOFTWARE_META,
         "strimer_lighting_modes": StrimerPlus.lighting_modes() + _SOFTWARE_META,
+        "aura_lighting_modes": AuraMainboard.lighting_modes(),
         "themes": [{"name": n, "swatch": t["swatch"]} for n, t in THEMES.items()],
         "sensors": ctrl.sensors.list(),
     }

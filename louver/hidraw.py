@@ -3,13 +3,15 @@
 Lian Li's ENE-based controllers expose a single vendor collection with
 report ID 0xE0: commands go out as *feature* reports, colour data as
 *output* reports, and replies (RPM, firmware) come back as *input*
-reports fetched with HIDIOCGINPUT.
+reports fetched with HIDIOCGINPUT. The ASUS Aura controller (aura.py)
+answers on the interrupt endpoint instead, so it uses ``read``.
 """
 
 from __future__ import annotations
 
 import fcntl
 import os
+import select
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -76,6 +78,12 @@ class HidrawTransport:
         buf[0] = report_id
         n = fcntl.ioctl(self._fd, HIDIOCGINPUT(len(buf)), buf, True)
         return bytes(buf[1:n]) if n > 0 else b""
+
+    def read(self, length: int, timeout: float) -> bytes:
+        """The next input report from the interrupt endpoint (hidapi's
+        hid_read), report-ID byte first; b"" if none comes within ``timeout``."""
+        ready, _, _ = select.select([self._fd], [], [], max(0.0, timeout))
+        return os.read(self._fd, length) if ready else b""
 
     def close(self) -> None:
         if self._fd >= 0:

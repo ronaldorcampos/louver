@@ -33,7 +33,7 @@
   <main>
     <div class="banner hidden" id="banner" role="status"></div>
 
-    <!-- ZONE: one fan group (hub port, motherboard header) or the Strimer -->
+    <!-- ZONE: one fan group (hub port, motherboard header), the Strimer or the motherboard's RGB -->
     <section class="view" id="view-zone">
       <header class="zone-head">
         <div class="zone-title">
@@ -141,6 +141,11 @@
           <p class="warn-note">A zone on a preset or custom curve runs at 100% while its temperature sensor can't be read, until the sensor comes back.</p>
         </section>
       </div>
+      <section class="panel settings" id="aura-settings" aria-labelledby="aura-h">
+        <h2 id="aura-h">Motherboard RGB</h2>
+        <label class="toggle"><input type="checkbox" id="set-aura"><span></span>Control motherboard RGB</label>
+        <p class="hint" id="aura-status"></p>
+      </section>
       <details class="panel advanced" id="lab-details">
         <summary>Lighting Lab <small>· identify effect numbers on your firmware</small></summary>
         <p class="hint">Hub firmware revisions number their effects differently. Step through effect numbers, watch the fans, and label what you see.

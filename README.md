@@ -46,6 +46,17 @@ library and talks to the controllers directly through `/dev/hidraw*`.
   - **Temperature:** colour follows a sensor, from blue through green and yellow to red.
 - Lighting per port or for all ports at once; per-port Strimer control; motherboard ARGB sync toggles.
 
+**Motherboard RGB** (ASUS Aura USB boards, opt-in)
+- The board's ARGB headers and onboard LEDs, as a **Motherboard RGB** zone: one
+  look for every channel, or one per channel. Every Aura hardware effect, with
+  a colour for the ones that take one. Themes set it too.
+- Off until you turn on **Settings → Control motherboard RGB**; until then
+  Louver never opens the board's Aura controller.
+- Louver doesn't save effects to the board's flash: after a restart the board
+  shows its own saved effect until Louver starts and sets it again. When Louver
+  stops, the lights stay as they are.
+- `louver aura-probe` shows the controller's firmware and channels (read-only).
+
 ## Install
 
 ### Ubuntu / Debian package
@@ -115,9 +126,10 @@ sudo systemctl disable uni-sync.service
 
 ```
 louver probe            read-only hardware check: firmware and RPM (no daemon needed)
+louver aura-probe       ASUS Aura motherboard RGB: firmware and channels (read-only)
 louver status           live state from the running daemon
 louver set 2 60         port 2 to a fixed 60%
-louver daemon --demo    simulated hub and Strimer, for trying the UI without hardware
+louver daemon --demo    simulated hub, Strimer and motherboard, for trying the UI without hardware
 ```
 
 ## Config
@@ -133,14 +145,30 @@ via `HIDIOCGINPUT`. The drivers in `louver/devices.py` follow the Rust
 implementation in [sgtaziz/lian-li-linux](https://github.com/sgtaziz/lian-li-linux) (MIT),
 and its unverified effect numbers come from there; the protocol was also
 cross-checked against [EightB1ts/uni-sync](https://github.com/EightB1ts/uni-sync) (MIT).
+
+The ASUS Aura USB mainboard controller (`0b05:19af` and the other Aura
+mainboard IDs) takes 65-byte output reports with report ID `0xEC` and answers
+its two queries (firmware, config table) on the interrupt endpoint.
+`louver/aura.py` is a port to Python of the Aura USB mainboard driver in
+[OpenRGB](https://gitlab.com/CalcProgrammer1/OpenRGB) (GPL-2.0-or-later), by
+Martin Hartl and Adam Honse; NOTICE names the files and the commit. It leaves
+out OpenRGB's "save to device" command, which writes the controller's flash,
+and its direct per-LED mode.
+The config table says how many LEDs are on the board and how many ARGB
+headers it has, but not how many LEDs are on each header, so Louver drives the
+headers with hardware effects only.
+
 Credits and licences are in [NOTICE](NOTICE).
 
 Not a Lian Li product; not affiliated with or endorsed by Lian Li. Lian Li, UNI HUB,
-Strimer and L-Connect are trademarks of Lian Li Industrial Co., Ltd.
+Strimer and L-Connect are trademarks of Lian Li Industrial Co., Ltd. Not affiliated
+with or endorsed by ASUS; ASUS, Aura and ROG are trademarks of ASUSTeK Computer Inc.
 
 ## Licence
 
-MIT; see [LICENSE](LICENSE).
+GNU GPL, version 2 or (at your option) any later version; see [LICENSE](LICENSE).
+Louver's code before the motherboard RGB port (commit d5b59b1 and earlier) was
+MIT-licensed; from this release on, Louver is GPL-2.0-or-later.
 
 ## Development
 

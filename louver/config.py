@@ -5,11 +5,14 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 from pathlib import Path
 
+from .aura import MODES as AURA_MODES
 from .curves import PRESETS, normalize
 from .devices import ALV2_INNER_MODES, ALV2_OUTER_MODES, STRIMER_MODES, parse_color
 from .rgbfx import SOFTWARE_MODES
+from .themes import THEMES
 
 FAN_MODES = ("quiet", "standard", "high", "full", "manual", "curve", "mb_sync")
 # Motherboard headers: "bios" leaves the header on the board's own curve.
@@ -51,6 +54,14 @@ def _default_light() -> dict:
 STRIMER_PORTS = 12
 
 
+def _default_aura_light() -> dict:
+    return {"mode": "Rainbow", "colors": ["#ff0000"]}
+
+
+# Channel keys as aura.decode_config names them.
+_AURA_KEY = re.compile(r"onboard|argb-[1-9][0-9]?")
+
+
 DEFAULTS: dict = {
     "poll_interval": 1.0,
     "min_percent": 0,
@@ -76,6 +87,14 @@ DEFAULTS: dict = {
     "app": {"start_on_login": False, "start_minimized": True, "close_to_tray": True},
     # Opt-in per header: [{"index": 2, "name": ..., "mode": "bios"|..., ...}]
     "motherboard": {"headers": []},
+    # ASUS Aura USB motherboard RGB. Off until turned on in Settings: while
+    # it's off, Louver never opens the board's Aura controller.
+    "motherboard_rgb": {
+        "enabled": False,
+        "per_channel": False,
+        "lighting": _default_aura_light(),  # every channel, unless per_channel
+        "channels": {},  # per_channel looks: {"onboard" | "argb-<n>": {"mode", "colors"}}
+    },
 }
 
 
@@ -124,8 +143,30 @@ def _validate_light(light: dict, modes, where: str) -> None:
                 raise ConfigError(f"{where}: {e}") from None
 
 
+def _validate_aura_light(light, where: str) -> dict:
+    if not isinstance(light, dict):
+        raise ConfigError(f"{where}: must be an object")
+    full = _merge(_default_aura_light(), light)
+    if set(full) != {"mode", "colors"}:
+        raise ConfigError(f"{where}: only mode and colors can be set")
+    if full["mode"] not in AURA_MODES:
+        raise ConfigError(f"{where}: unknown effect {full['mode']!r}")
+    colors = full["colors"]
+    if not isinstance(colors, list) or len(colors) != 1:
+        raise ConfigError(f"{where}: colors must be a list of one colour")
+    try:
+        parse_color(colors[0])
+    except (ValueError, TypeError) as e:
+        raise ConfigError(f"{where}: {e}") from None
+    return full
+
+
 def validate(cfg: dict) -> dict:
     """Fill defaults and reject invalid values. Returns a new dict."""
+    theme = cfg.get("theme")
+    if "motherboard_rgb" not in cfg and isinstance(theme, str) and theme in THEMES:
+        # A config from before motherboard RGB: start it on the theme in use.
+        cfg = {**cfg, "motherboard_rgb": {"lighting": copy.deepcopy(THEMES[theme]["aura"])}}
     cfg = _merge(DEFAULTS, cfg)
     if not 0.25 <= float(cfg["poll_interval"]) <= 30:
         raise ConfigError("poll_interval must be 0.25..30 s")
@@ -199,6 +240,19 @@ def validate(cfg: dict) -> dict:
     for i, light in enumerate(ports):
         ports[i] = _merge(_default_light(), light)
         _validate_light(ports[i], strimer_modes, f"strimer port {i + 1}")
+    mrgb = cfg["motherboard_rgb"]
+    if set(mrgb) != set(DEFAULTS["motherboard_rgb"]):
+        raise ConfigError(f"motherboard_rgb: keys must be {sorted(DEFAULTS['motherboard_rgb'])}")
+    for key in ("enabled", "per_channel"):
+        if not isinstance(mrgb[key], bool):
+            raise ConfigError(f"motherboard_rgb.{key} must be true or false")
+    mrgb["lighting"] = _validate_aura_light(mrgb["lighting"], "motherboard_rgb lighting")
+    if not isinstance(mrgb["channels"], dict):
+        raise ConfigError("motherboard_rgb.channels must be an object")
+    for key, light in mrgb["channels"].items():
+        if not _AURA_KEY.fullmatch(key):
+            raise ConfigError(f"motherboard_rgb channel {key!r}: must be onboard or argb-<n>")
+        mrgb["channels"][key] = _validate_aura_light(light, f"motherboard_rgb channel {key}")
     return cfg
 
 

@@ -1,15 +1,35 @@
 Louver
-Copyright (c) 2026 Ronaldo Campos. Licensed under the MIT License (see LICENSE).
+Copyright (c) 2026 Ronaldo Campos. Licensed under the GNU General Public
+License, version 2 or (at your option) any later version (see LICENSE).
+Louver's code before the motherboard RGB port (commit d5b59b1 and earlier) was
+MIT-licensed; from this release on, Louver is GPL-2.0-or-later.
 
-Louver is written in Python. Its device drivers (louver/devices.py) follow
+Louver is written in Python. Its Lian Li drivers (louver/devices.py) follow
 the Rust implementation in lian-li-linux, and its unverified effect numbers
 come from it; the controller protocol was also cross-checked against
-uni-sync, which shares no code with Louver.
+uni-sync, which shares no code with Louver. lian-li-linux's MIT notice
+below still applies to the parts of louver/devices.py that follow it.
 
   lian-li-linux  https://github.com/sgtaziz/lian-li-linux
                  Copyright (c) 2026 sgtaziz, MIT License (full notice below)
   uni-sync       https://github.com/EightB1ts/uni-sync
                  Copyright (c) 2023 Cameron Halter, MIT License
+
+Its ASUS Aura driver (louver/aura.py) is a port to Python of OpenRGB's Aura
+USB mainboard driver, GNU GPL version 2 or (at your option) any later
+version, at commit b190d3e5afb6bd68b4bfa3e948947878d2bf1ba9:
+
+  OpenRGB        https://gitlab.com/CalcProgrammer1/OpenRGB
+                 Controllers/AsusAuraUSBController/
+                   AsusAuraUSBController/AsusAuraUSBController.h, .cpp (Martin Hartl):
+                     the firmware and config-table queries
+                   AsusAuraUSBController/AsusAuraMainboardController.h, .cpp (Martin Hartl):
+                     the channels, effect and effect-colour commands
+                   AsusAuraUSBController/RGBController_AsusAuraUSB.cpp (Adam Honse):
+                     the effect list
+                   AsusAuraUSBControllerDetect.cpp: the mainboard product IDs
+                 Not ported: the save-to-device commit (it writes the
+                 controller's flash) and direct per-LED mode.
 
 Bundled fonts, under the SIL Open Font License 1.1 (louver/web/fonts/):
   Unbounded     Copyright 2022 The Unbounded Project Authors
@@ -18,6 +38,9 @@ Bundled fonts, under the SIL Open Font License 1.1 (louver/web/fonts/):
 Lian Li, UNI HUB, Strimer and L-Connect are trademarks of Lian Li Industrial
 Co., Ltd., named here only to say which hardware Louver works with. Louver is
 not a Lian Li product and is not affiliated with or endorsed by Lian Li.
+ASUS, Aura and ROG are trademarks of ASUSTeK Computer Inc., named here only to
+say which hardware Louver works with. Louver is not affiliated with or
+endorsed by ASUS.
 
 ---- lian-li-linux licence ----
 
