@@ -7,7 +7,7 @@ from louver.devices import StrimerPlus, UniHubALV2
 from louver.rgbfx import gradient, render_hub_port, render_strimer_port, thermal
 from louver.themes import THEMES, apply_theme
 
-from .fakes import Z, HUB_RESPONSES, STRIMER_RESPONSES, FakeTransport
+from .fakes import HUB_RESPONSES, STRIMER_RESPONSES, FakeTransport, Z
 from .test_control import Rig, _req, server  # noqa: F401  (fixture)
 
 

@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Sequence
 
 from .hidraw import Transport
 
@@ -131,7 +131,7 @@ class LightingEffect:
     ring: str = "both"  # inner | outer | both
 
     @classmethod
-    def from_dict(cls, d: dict) -> "LightingEffect":
+    def from_dict(cls, d: dict) -> LightingEffect:
         return cls(
             mode=str(d.get("mode", "Rainbow")),
             colors=tuple(parse_color(c) for c in d.get("colors", ["#ff0000"])) or ((255, 0, 0),),

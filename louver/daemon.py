@@ -7,10 +7,10 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Callable
 
 from . import config as cfgmod
 from .curves import PRESETS, Governor, interpolate

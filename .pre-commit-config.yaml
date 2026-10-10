@@ -1,0 +1,10 @@
+# Install once per clone: pre-commit install
+# CI runs the same hooks (pre-commit run --all-files), so the ruff version
+# below is the one place to bump it.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.0
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format

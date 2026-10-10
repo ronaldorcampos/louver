@@ -154,7 +154,7 @@ def cmd_status(args, cfg: dict, path: Path) -> int:
         return 1
     hub = st["hub"]
     print(f"{hub['name']}: {'connected' if hub['connected'] else 'NOT connected'} {hub['firmware']}")
-    for i, (g, gc) in enumerate(zip(hub["groups"], cfg["hub"]["groups"])):
+    for g, gc in zip(hub["groups"], cfg["hub"]["groups"]):
         pct = "MB" if g["percent"] is None else f"{g['percent']:>3}%"
         temp = "  -  " if g["temp"] is None else f"{g['temp']:4.1f}C"
         flag = (
@@ -228,8 +228,9 @@ def cmd_mb_list(args, cfg: dict, path: Path) -> int:
     for d in mb.describe():
         name, mode = names.get(d["index"], ("", "bios"))
         auto = "manual" if d["enable"] == 1 else f"auto({d['enable']})"
+        pct = round((d["pwm"] or 0) / 2.55)
         print(
-            f"  header {d['index']}: {d['rpm']:>5} rpm  pwm {d['pwm']:>3}/255 ({round((d['pwm'] or 0) / 2.55):>3}%)  {auto:<8} {mode:<8} {name}"
+            f"  header {d['index']}: {d['rpm']:>5} rpm  pwm {d['pwm']:>3}/255 ({pct:>3}%)  {auto:<8} {mode:<8} {name}"
         )
     return 0
 

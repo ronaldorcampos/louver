@@ -2,7 +2,7 @@ import pytest
 
 from louver.devices import LightingEffect, StrimerPlus, UniHubALV2
 
-from .fakes import Z, HUB_RESPONSES, STRIMER_RESPONSES, FakeTransport
+from .fakes import HUB_RESPONSES, STRIMER_RESPONSES, FakeTransport, Z
 
 
 def hub(responses=HUB_RESPONSES):

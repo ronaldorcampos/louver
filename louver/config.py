@@ -9,7 +9,7 @@ import shutil
 from pathlib import Path
 
 from .curves import PRESETS, normalize
-from .devices import STRIMER_MODES, ALV2_INNER_MODES, ALV2_OUTER_MODES, parse_color
+from .devices import ALV2_INNER_MODES, ALV2_OUTER_MODES, STRIMER_MODES, parse_color
 from .rgbfx import SOFTWARE_MODES
 
 FAN_MODES = ("quiet", "standard", "high", "full", "manual", "curve", "mb_sync")

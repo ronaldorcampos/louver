@@ -9,7 +9,7 @@ Software modes:
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from .devices import Color, parse_color
 

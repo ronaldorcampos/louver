@@ -1,6 +1,5 @@
 import json
 import re
-import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -12,7 +11,7 @@ from louver.curves import Governor, interpolate, normalize
 from louver.daemon import Controller, serve
 from louver.devices import StrimerPlus, UniHubALV2
 
-from .fakes import Z, HUB_RESPONSES, STRIMER_RESPONSES, FakeSensors, FakeTransport
+from .fakes import HUB_RESPONSES, STRIMER_RESPONSES, FakeSensors, FakeTransport, Z
 
 
 # ---------------- curves ----------------

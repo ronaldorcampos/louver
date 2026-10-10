@@ -110,4 +110,5 @@ Not a Lian Li product; not affiliated with Lian Li.
 
 ```bash
 python3 -m pytest
+pre-commit install   # once per clone: ruff check + ruff format on every commit
 ```
