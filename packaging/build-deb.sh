@@ -31,7 +31,7 @@ version="$(printf '%s\n' "$pep440" | sed -E 's/(a|b|rc)([0-9]+)$/~\1\2/')"
 root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT
 py="$root/usr/lib/python3/dist-packages"
-mkdir -p "$py" "$root/usr/bin" "$root/usr/lib/systemd/user" "$root/usr/lib/systemd/system" "$root/usr/lib/udev/rules.d" \
+mkdir -p "$py" "$root/usr/bin" "$root/usr/lib/systemd/user" "$root/usr/lib/udev/rules.d" \
   "$root/usr/lib/tmpfiles.d" \
   "$root/usr/share/applications" "$root/usr/share/icons" "$root/usr/share/doc/louver" "$root/DEBIAN"
 
@@ -62,9 +62,6 @@ if grep -q -e PYTHONPATH -e '\.local' "$unit" || ! grep -q '^ExecStart=/usr/bin/
   echo "build-deb: packaging/louver.service changed shape; update the sed above" >&2
   exit 1
 fi
-
-# The RAM RGB root helper: a system socket and the sandboxed service it starts.
-cp "$here/packaging/louver-ram.socket" "$here/packaging/louver-ram.service" "$root/usr/lib/systemd/system/"
 
 # /run/louver, for the machine-wide hardware lock (louver/instance.py).
 cp "$here/packaging/louver.tmpfiles" "$root/usr/lib/tmpfiles.d/louver.conf"
@@ -105,16 +102,6 @@ COPY
   echo "Comment: A port of OpenRGB's Aura USB mainboard driver"
   echo " (https://gitlab.com/CalcProgrammer1/OpenRGB) at commit"
   echo " $(sed -n 's/^OPENRGB_COMMIT = "\([0-9a-f]*\)"$/\1/p' "$here/louver/aura.py"); see NOTICE."
-  echo
-  echo "Files: louver/corsair_dram.py"
-  echo "Copyright: 2019, 2026 Adam Honse (CalcProgrammer1)"
-  echo "           2020 Erik Gilling (konkers)"
-  echo "           other OpenRGB contributors"
-  echo "           $ours"
-  echo "License: GPL-2+"
-  echo "Comment: A port of OpenRGB's Corsair DRAM driver"
-  echo " (https://gitlab.com/CalcProgrammer1/OpenRGB) at commit"
-  echo " $(sed -n 's/^OPENRGB_COMMIT = "\([0-9a-f]*\)"$/\1/p' "$here/louver/corsair_dram.py"); see NOTICE."
   echo
   echo "Files: louver/web/fonts/*"
   echo "Copyright: $(sed -n '1s/^Copyright //p' "$here/louver/web/fonts/LICENSE-unbounded.txt")"

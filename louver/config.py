@@ -11,8 +11,6 @@ from pathlib import Path
 from .aura import MODES as AURA_MODES
 from .curves import PRESETS, normalize
 from .devices import ALV2_INNER_MODES, ALV2_OUTER_MODES, STRIMER_MODES, parse_color
-from .ramrgb import MAX_COLORS as RAM_MAX_COLORS
-from .ramrgb import MODES as RAM_MODES
 from .rgbfx import SOFTWARE_MODES
 from .themes import THEMES
 
@@ -61,10 +59,6 @@ def _default_aura_light() -> dict:
     return {"mode": "Rainbow", "colors": ["#ff0000"]}
 
 
-def _default_ram_light() -> dict:
-    return {"mode": "Static", "colors": ["#ffffff"]}
-
-
 # Channel keys as aura.decode_config names them.
 _AURA_KEY = re.compile(r"onboard|argb-[1-9][0-9]?")
 
@@ -100,12 +94,6 @@ DEFAULTS: dict = {
         "per_channel": False,
         "lighting": _default_aura_light(),  # every channel, unless per_channel
         "channels": {},  # per_channel looks: {"onboard" | "argb-<n>": {"mode", "colors"}}
-    },
-    # Corsair DDR5 RAM RGB, through the louver-ram root helper. Off until
-    # turned on in Settings: while it's off, Louver never contacts the helper.
-    "ram_rgb": {
-        "enabled": False,
-        "lighting": _default_ram_light(),  # every stick
     },
 }
 
@@ -173,34 +161,12 @@ def _validate_aura_light(light, where: str) -> dict:
     return full
 
 
-def _validate_ram_light(light, where: str) -> dict:
-    if not isinstance(light, dict):
-        raise ConfigError(f"{where}: must be an object")
-    full = _merge(_default_ram_light(), light)
-    if set(full) != {"mode", "colors"}:
-        raise ConfigError(f"{where}: only mode and colors can be set")
-    if full["mode"] not in RAM_MODES:
-        raise ConfigError(f"{where}: mode must be one of {RAM_MODES}")
-    colors = full["colors"]
-    if not isinstance(colors, list) or not 1 <= len(colors) <= RAM_MAX_COLORS:
-        raise ConfigError(f"{where}: colors must be a list of 1..{RAM_MAX_COLORS} colours")
-    for c in colors:
-        try:
-            parse_color(c)
-        except (ValueError, TypeError) as e:
-            raise ConfigError(f"{where}: {e}") from None
-    return full
-
-
 def validate(cfg: dict) -> dict:
     """Fill defaults and reject invalid values. Returns a new dict."""
     theme = cfg.get("theme")
-    if isinstance(theme, str) and theme in THEMES:
-        # A config from before motherboard or RAM RGB: start it on the theme in use.
-        if "motherboard_rgb" not in cfg:
-            cfg = {**cfg, "motherboard_rgb": {"lighting": copy.deepcopy(THEMES[theme]["aura"])}}
-        if "ram_rgb" not in cfg:
-            cfg = {**cfg, "ram_rgb": {"lighting": copy.deepcopy(THEMES[theme]["ram"])}}
+    if "motherboard_rgb" not in cfg and isinstance(theme, str) and theme in THEMES:
+        # A config from before motherboard RGB: start it on the theme in use.
+        cfg = {**cfg, "motherboard_rgb": {"lighting": copy.deepcopy(THEMES[theme]["aura"])}}
     cfg = _merge(DEFAULTS, cfg)
     if not 0.25 <= float(cfg["poll_interval"]) <= 30:
         raise ConfigError("poll_interval must be 0.25..30 s")
@@ -209,6 +175,7 @@ def validate(cfg: dict) -> dict:
     if cfg["on_exit"] not in EXIT_ACTIONS:
         raise ConfigError(f"on_exit must be one of {EXIT_ACTIONS}")
     cfg.pop("listen", None)  # retired: the API is a Unix socket now, not a TCP port
+    cfg.pop("ram_rgb", None)  # retired: RAM RGB was removed (the sticks refuse direct frames)
     groups = cfg["hub"]["groups"]
     if len(groups) != 4:
         raise ConfigError("hub.groups must have 4 entries")
@@ -298,12 +265,6 @@ def validate(cfg: dict) -> dict:
         if not _AURA_KEY.fullmatch(key):
             raise ConfigError(f"motherboard_rgb channel {key!r}: must be onboard or argb-<n>")
         mrgb["channels"][key] = _validate_aura_light(light, f"motherboard_rgb channel {key}")
-    ram = cfg["ram_rgb"]
-    if not isinstance(ram, dict) or set(ram) != set(DEFAULTS["ram_rgb"]):
-        raise ConfigError(f"ram_rgb: keys must be {sorted(DEFAULTS['ram_rgb'])}")
-    if not isinstance(ram["enabled"], bool):
-        raise ConfigError("ram_rgb.enabled must be true or false")
-    ram["lighting"] = _validate_ram_light(ram["lighting"], "ram_rgb lighting")
     return cfg
 
 

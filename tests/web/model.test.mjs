@@ -265,54 +265,6 @@ test("effectTag for Aura effects", () => {
   assert.equal(M.effectTag("aura", { name: "Off", max_colors: 0 }), "LEDs off");
 });
 
-// ---------------- RAM RGB (Corsair DDR5, through louver-ram) ----------------
-const STICKS = [{ addr: 0x19, name: "Corsair Vengeance RGB DDR5", leds: 10, firmware: "1.3.300" }, { addr: 0x1b, name: "Corsair Vengeance RGB DDR5", leds: 10, firmware: "1.3.300" }];
-const ramCfg = (L) => ({ ...cfg(), ram_rgb: { enabled: true, lighting: L } });
-
-test("ramFrame: one colour per LED, like ramrgb.render", () => {
-  assert.deepEqual(M.ramFrame({ mode: "Off", colors: ["#ff0000"] }, 3), [M.OFF, M.OFF, M.OFF]);
-  assert.deepEqual(M.ramFrame({ mode: "Static", colors: ["#00FF00", "#ff0000"] }, 2), ["#00ff00", "#00ff00"]);
-  const g = M.ramFrame({ mode: "Gradient", colors: ["#ff0000", "#0000ff"] }, 10);
-  assert.equal(g.length, 10);
-  assert.equal(g[0], "#ff0000");
-  assert.equal(g[9], "#0000ff");
-  assert.equal(g[4], "#8e0071");  // (142, 0, 113): the same rounding as the daemon's frame
-  assert.deepEqual(M.ramFrame({ mode: "Gradient", colors: ["#00ff00"] }, 2), ["#00ff00", "#00ff00"]);
-  assert.deepEqual(M.ramFrame({ mode: "Gradient", colors: ["#ff0000", "#0000ff"] }, 1), ["#ff0000"]);
-});
-
-test("ramBar: the look along one stick; dark with no sticks or Off", () => {
-  assert.deepEqual(M.ramBar(ramCfg({ mode: "Static", colors: ["#123456"] }), STICKS), ["#123456"]);
-  assert.equal(M.ramBar(ramCfg({ mode: "Gradient", colors: ["#ff0000", "#0000ff"] }), STICKS).length, 10);
-  assert.deepEqual(M.ramBar(ramCfg({ mode: "Off", colors: ["#123456"] }), STICKS), [M.OFF]);
-  assert.deepEqual(M.ramBar(ramCfg({ mode: "Static", colors: ["#123456"] }), []), [M.OFF]);
-});
-
-test("ramDetail names the LED count, firmware and address", () => {
-  assert.equal(M.ramDetail(STICKS[1]), "10 LEDs · firmware 1.3.300 · address 0x1b");
-  assert.equal(M.ramDetail({ ...STICKS[0], leds: 1 }), "1 LED · firmware 1.3.300 · address 0x19");
-});
-
-test("zones: RAM RGB only when it's on and the helper found sticks; #ram routes to it", () => {
-  const st = (ram) => ({ ...STATE([], true), ram_rgb: { sticks: STICKS, ...ram } });
-  const c = cfg({ fans: [0, 0, 0, 0] });
-  assert.deepEqual(M.zones(c, st({ enabled: true, connected: true })).map(M.zoneKey), ["strimer", "ram"]);
-  assert.deepEqual(M.zones(c, st({ enabled: true, connected: false })).map(M.zoneKey), ["strimer"]);
-  assert.deepEqual(M.zones(c, st({ enabled: false, connected: true })).map(M.zoneKey), ["strimer"]);
-  assert.deepEqual(M.zones(c, STATE([], true)).map(M.zoneKey), ["strimer"]);  // no ram_rgb in the state
-  const both = { ...st({ enabled: true, connected: true }), motherboard_rgb: { enabled: true, connected: true, channels: [] } };
-  assert.deepEqual(M.zones(c, both).map(M.zoneKey), ["strimer", "aura", "ram"]);
-  assert.deepEqual(M.parseHash("#ram"), { view: "zone", sel: { kind: "ram", i: 0 } });
-  assert.equal(M.hashFor("zone", { kind: "ram", i: 0 }), "#ram");
-  assert.equal(M.parseHash("#ram-1"), null);
-});
-
-test("effectTag for RAM looks", () => {
-  assert.equal(M.effectTag("ram", { name: "Off", max_colors: 0 }), "LEDs off");
-  assert.equal(M.effectTag("ram", { name: "Static", max_colors: 1 }), "one colour");
-  assert.equal(M.effectTag("ram", { name: "Gradient", max_colors: 6 }), "colour stops along each stick");
-});
-
 test("speedModes: a pump header offers only BIOS and Full", () => {
   const meta = { fan_modes: ["quiet", "mb_sync"], mb_fan_modes: ["bios", "quiet", "full", "manual"], pump_modes: ["bios", "full"] };
   assert.deepEqual(M.speedModes(meta, "hub", { pump: true }), ["quiet", "mb_sync"]);  // hub ports have no pump flag

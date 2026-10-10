@@ -1,13 +1,11 @@
-"""Preset RGB themes: one click sets every hub port, the Strimer, the
-motherboard's Aura channels and the RAM sticks.
+"""Preset RGB themes: one click sets every hub port, the Strimer and the
+motherboard's Aura channels.
 
 A theme's ``hub`` is either one lighting entry (applied to all four ports)
 or a list of four. Missing fields fall back to lighting defaults. ``aura``
 is one look for every motherboard channel: the Aura controller only runs
 its own hardware effects, each with at most one colour, so it gets the
 nearest one (and Thermal's software effect can't follow the sensor there).
-``ram`` is one static look for every RAM stick, drawn by Louver: Off,
-Static or a Gradient along each stick's LEDs.
 """
 
 from __future__ import annotations
@@ -20,7 +18,6 @@ THEMES: dict[str, dict] = {
         "hub": {"mode": "Rainbow", "ring": "both", "speed": 2},
         "strimer": {"mode": "Rainbow", "speed": 2},
         "aura": {"mode": "Rainbow"},
-        "ram": {"mode": "Gradient", "colors": ["#ff0000", "#ffd400", "#00ff6a", "#0088ff", "#b000ff"]},
     },
     "Ocean": {
         "swatch": ["#001aff", "#0077ff", "#00c8ff", "#00ffd5"],
@@ -32,7 +29,6 @@ THEMES: dict[str, dict] = {
         },
         "strimer": {"mode": "Gradient", "span_all": True, "colors": ["#001aff", "#00c8ff", "#00ffd5"]},
         "aura": {"mode": "Static", "colors": ["#0077ff"]},
-        "ram": {"mode": "Gradient", "colors": ["#001aff", "#0077ff", "#00c8ff", "#00ffd5"]},
     },
     "Sunset": {
         "swatch": ["#ff1e00", "#ff6a00", "#ff2d7a", "#8a00ff"],
@@ -44,7 +40,6 @@ THEMES: dict[str, dict] = {
         },
         "strimer": {"mode": "Gradient", "span_all": True, "colors": ["#ff1e00", "#ff6a00", "#ff2d7a", "#8a00ff"]},
         "aura": {"mode": "Static", "colors": ["#ff2d7a"]},
-        "ram": {"mode": "Gradient", "colors": ["#ff1e00", "#ff6a00", "#ff2d7a", "#8a00ff"]},
     },
     "Cyberpunk": {
         "swatch": ["#ff00c8", "#00f0ff"],
@@ -52,28 +47,24 @@ THEMES: dict[str, dict] = {
         "hub": {"mode": "Custom", "ring": "both", "custom": {"inner": ["#ff00c8"] * 48, "outer": ["#00f0ff"] * 72}},
         "strimer": {"mode": "Mixing", "colors": ["#ff00c8", "#00f0ff"], "speed": 1},
         "aura": {"mode": "Static", "colors": ["#ff00c8"]},
-        "ram": {"mode": "Gradient", "colors": ["#ff00c8", "#00f0ff"]},
     },
     "Arctic": {
         "swatch": ["#ffffff", "#bfe9ff", "#4fb8ff"],
         "hub": {"mode": "Custom", "ring": "both", "custom": {"inner": ["#ffffff"] * 48, "outer": ["#4fb8ff"] * 72}},
         "strimer": {"mode": "Breathing", "colors": ["#bfe9ff"], "speed": 0},
         "aura": {"mode": "Breathing", "colors": ["#bfe9ff"]},
-        "ram": {"mode": "Gradient", "colors": ["#ffffff", "#bfe9ff", "#4fb8ff"]},
     },
     "Inferno": {
         "swatch": ["#ff0000", "#ff5a00", "#ffb300"],
         "hub": {"mode": "Meteor", "ring": "both", "speed": 3, "colors": ["#ff0000", "#ff5a00", "#ffb300"]},
         "strimer": {"mode": "Meteor", "speed": 3, "colors": ["#ff0000", "#ff5a00", "#ffb300"]},
         "aura": {"mode": "Chase Fade", "colors": ["#ff5a00"]},
-        "ram": {"mode": "Gradient", "colors": ["#ff0000", "#ff5a00", "#ffb300"]},
     },
     "Forest": {
         "swatch": ["#003d12", "#00a34a", "#9dff3a"],
         "hub": {"mode": "Gradient", "ring": "both", "span_all": True, "colors": ["#00591a", "#00c853", "#9dff3a"]},
         "strimer": {"mode": "Breathing", "colors": ["#00c853"], "speed": 0},
         "aura": {"mode": "Breathing", "colors": ["#00c853"]},
-        "ram": {"mode": "Gradient", "colors": ["#003d12", "#00a34a", "#9dff3a"]},
     },
     "Vaporwave": {
         "swatch": ["#ff71ce", "#b967ff", "#01cdfe", "#05ffa1"],
@@ -85,21 +76,18 @@ THEMES: dict[str, dict] = {
         },
         "strimer": {"mode": "Wave", "speed": 1, "colors": ["#ff71ce", "#b967ff", "#01cdfe", "#05ffa1"]},
         "aura": {"mode": "Static", "colors": ["#b967ff"]},
-        "ram": {"mode": "Gradient", "colors": ["#ff71ce", "#b967ff", "#01cdfe", "#05ffa1"]},
     },
     "Thermal": {
         "swatch": ["#005aff", "#00dc78", "#ffd200", "#ff2800"],
         "hub": {"mode": "Temperature", "ring": "both", "sensor": "cpu", "temp_range": [35, 85]},
         "strimer": {"mode": "Temperature", "sensor": "gpu", "temp_range": [35, 80]},
         "aura": {"mode": "Static", "colors": ["#00dc78"]},
-        "ram": {"mode": "Static", "colors": ["#00dc78"]},
     },
     "Stealth": {
         "swatch": ["#111111", "#2a2a2a"],
         "hub": {"mode": "Off"},
         "strimer": {"mode": "Off"},
         "aura": {"mode": "Off"},
-        "ram": {"mode": "Off"},
     },
 }
 
@@ -120,6 +108,5 @@ def apply_theme(cfg: dict, name: str) -> dict:
     # Written even while motherboard RGB is off, so turning it on shows the theme.
     out["motherboard_rgb"]["lighting"] = copy.deepcopy(theme["aura"])
     out["motherboard_rgb"]["per_channel"] = False
-    out["ram_rgb"]["lighting"] = copy.deepcopy(theme["ram"])  # likewise while RAM RGB is off
     out["theme"] = name
     return out

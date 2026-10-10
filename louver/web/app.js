@@ -9,8 +9,8 @@ const $ = (id) => document.getElementById(id);
 
 let cfg = null, meta = null, state = null;
 // The selected zone: a hub port (i = 0..3), a motherboard header (i = its
-// number), the Strimer, the motherboard's RGB (kind "aura") or the RAM
-// sticks (kind "ram"). view is "zone" or "settings".
+// number), the Strimer or the motherboard's RGB (kind "aura"). view is
+// "zone" or "settings".
 let sel = { kind: "hub", i: 2 }, view = "zone";
 let saveTimer = null, dragging = false, editSeq = 0;
 // savePending: an edit of ours hasn't reached the daemon yet. cfgRev: the
@@ -97,22 +97,18 @@ function zoneName(z) {
   if (z.kind === "hub") return cfg.hub.groups[z.i].name;
   if (z.kind === "mb") return mbCfg(z.i)?.name || `Header ${z.i}`;
   if (z.kind === "aura") return "Motherboard RGB";
-  if (z.kind === "ram") return "RAM RGB";
   return "Strimer Plus";
 }
 function zoneState(z) {
   if (z.kind === "hub") return state?.hub.groups[z.i];
   if (z.kind === "mb") return state?.motherboard.headers.find((h) => h.index === z.i);
   if (z.kind === "aura") return state?.motherboard_rgb;
-  if (z.kind === "ram") return state?.ram_rgb;
   return state?.strimer;
 }
-// The Strimer, motherboard RGB and RAM RGB are lighting only: no speed, no duty.
-const lightOnly = (z) => z.kind === "strimer" || z.kind === "aura" || z.kind === "ram";
+// The Strimer and motherboard RGB are lighting only: no speed, no duty.
+const lightOnly = (z) => z.kind === "strimer" || z.kind === "aura";
 // The channels Louver drives (skipped ones carry a note: see auraSkipped).
 const auraChannels = () => M.auraUsable(state?.motherboard_rgb?.channels);
-const ramSticks = () => state?.ram_rgb?.sticks || [];
-const sticksLabel = (n) => `${n} stick${n === 1 ? "" : "s"}`;
 
 // Keep the selection on a zone that still exists (a port set to 0 fans, a
 // Strimer that was unplugged, a hash naming something that isn't there).
@@ -170,7 +166,6 @@ function zonePreview(z) {
   if (z.kind === "hub") return M.hubFanPreview(cfg, meta, z.i, 0);
   if (z.kind === "mb") return "mb";
   if (z.kind === "aura") return barCss(M.auraBar(cfg, meta, auraChannels()));
-  if (z.kind === "ram") return barCss(M.ramBar(cfg, ramSticks()));
   return strimerBar();
 }
 
@@ -190,7 +185,6 @@ function fillZoneButton(b, z) {
     const n = auraChannels().length;
     sub = `${n} channel${n === 1 ? "" : "s"} · ASUS Aura`;
   }
-  else if (z.kind === "ram") sub = `${sticksLabel(ramSticks().length)} · Corsair DDR5`;
   else {
     const c = z.kind === "hub" ? cfg.hub.groups[z.i] : mbCfg(z.i) || { mode: "bios" };
     sub = (z.kind === "hub" ? `${c.fans} fan${c.fans === 1 ? "" : "s"} · ` : "") + `${s?.rpm ?? 0} rpm`
@@ -238,7 +232,7 @@ function renderThemes() {
 }
 
 function renderStatus() {
-  const h = state.hub, s = state.strimer, m = state.motherboard, a = state.motherboard_rgb, r = state.ram_rgb;
+  const h = state.hub, s = state.strimer, m = state.motherboard, a = state.motherboard_rgb;
   const row = (name, detail, status, cls = "") => el("div", { class: "dev" },
     el("span", {}, el("b", {}, name), el("small", {}, detail)), el("i", { class: cls }, "● " + status));
   const linked = (d) => (d.connected ? ["firmware " + (d.firmware || "?"), "linked"] : ["not connected", "offline", "off"]);
@@ -246,11 +240,8 @@ function renderStatus() {
     row("UNI HUB AL V2", ...linked(h)),
     row("Strimer Plus", ...linked(s)),
     ...(m?.present ? [row("Motherboard", m.chip, ...(m.error ? ["error", "bad"] : m.writable ? ["control"] : ["read-only", "off"]))] : []),
-    ...(a?.enabled ? [row("Motherboard RGB", ...(a.error ? ["ASUS Aura", "error", "bad"] : linked(a)))] : []),
-    ...(r?.enabled ? [row("RAM RGB", ...(r.error ? ["Corsair DDR5", "error", "bad"]
-      : r.connected ? [sticksLabel(r.sticks.length), "linked"] : ["not connected", "offline", "off"]))] : []));
+    ...(a?.enabled ? [row("Motherboard RGB", ...(a.error ? ["ASUS Aura", "error", "bad"] : linked(a)))] : []));
   renderAuraStatus();
-  renderRamStatus();
   const b = $("banner");
   const msg = state.error || (!h.connected ? "UNI HUB not connected — check the USB cable and the udev rule (see README)." : "")
     || (onZone() && sel.kind === "mb" ? m?.error || (m && !m.writable ? "Read-only: install the hwmon udev rule (README) to control motherboard headers." : "") : "");
@@ -278,9 +269,6 @@ function renderZoneHead() {
   if (z.kind === "aura") {
     const a = state?.motherboard_rgb, n = auraChannels().length;
     $("zone-sub").textContent = `${n} channel${n === 1 ? "" : "s"} · firmware ${a?.firmware || "?"} · ${a?.name || "ASUS Aura"}`;
-  } else if (z.kind === "ram") {
-    const sticks = ramSticks();
-    $("zone-sub").textContent = `${sticksLabel(sticks.length)} · ${[...new Set(sticks.map((st) => st.name))].join(", ") || "Corsair DDR5"}`;
   } else if (z.kind === "hub") {
     const n = cfg.hub.groups[z.i].fans;
     $("zone-sub").textContent = `${n} fan${n === 1 ? "" : "s"} · hub port ${z.i + 1} · UNI HUB AL V2`;
@@ -862,7 +850,6 @@ function editLight({ rerender = true, delay = 0 } = {}) {
 function renderLighting() {
   const tools = $("light-tools"), box = $("light-controls"), fx = $("light-effects"), hint = $("mbsync-hint");
   if (sel.kind === "aura") { renderAuraLighting(tools, box, fx, hint); return; }
-  if (sel.kind === "ram") { renderRamLighting(tools, box, fx, hint); return; }
   if (sel.kind === "hub") {
     const i = sel.i, synced = cfg.hub.mb_rgb_sync;
     tools.replaceChildren(
@@ -972,52 +959,6 @@ function renderAuraLighting(tools, box, fx, hint) {
   }, k % 2 === 1))));
 }
 
-// ---- RAM RGB: one static look on every stick, drawn by Louver ----
-function ramPanelSub(sticks) {
-  const counts = [...new Set(sticks.map((st) => st.leds))];
-  return `${sticksLabel(sticks.length)} · ` + (counts.length === 1 ? `${counts[0]} LEDs each` : sticks.map((st) => `${st.leds} LEDs`).join(", "));
-}
-function renderRamLighting(tools, box, fx, hint) {
-  const L = cfg.ram_rgb.lighting, sticks = ramSticks();
-  const set = (patch) => { cfg.ram_rgb.lighting = { ...cfg.ram_rgb.lighting, ...patch }; editLight(); };
-  hint.classList.add("hidden");
-  box.classList.remove("hidden");
-  fx.classList.add("hidden");
-  fx.replaceChildren();
-  tools.replaceChildren(el("span", { class: "hint" }, "Colours only, sent by Louver through the louver-ram helper. Nothing is saved to the sticks: after a restart they show their own effect until Louver starts."));
-  const bars = el("div", { class: "port-bars" }, ...sticks.map((st) => {
-    const b = el("span", { title: `${st.name} · ${M.ramDetail(st)}` });
-    b.style.background = barCss(M.ramFrame(L, st.leds));
-    return b;
-  }));
-  const modes = meta.ram_lighting_modes;
-  const colours = L.mode === "Gradient"
-    ? field("Colour stops", colorInputs(L.colors, Math.max(2, Math.min(6, L.colors.length)), (i) => `Stop ${i + 1}`, (c) => set({ colors: c }), { addRemove: true }))
-    : L.mode === "Static"
-      ? field("Colour", colorInputs(L.colors, 1, () => "Colour", (c) => set({ colors: c })))
-      : field("Colour", el("span", { class: "none" }, "LEDs off"));
-  box.replaceChildren(el("section", { class: "panel" },
-    el("div", { class: "panel-head" }, el("h2", {}, "Every stick", el("small", {}, " · " + ramPanelSub(sticks)))),
-    el("div", { class: "preview" }, bars),
-    el("div", { class: "chips", role: "group", "aria-label": "RAM RGB look" }, ...modes.map((m) => el("button", {
-      class: "chip" + (m.name === L.mode ? " on" : ""), "aria-pressed": String(m.name === L.mode), title: M.effectTag("ram", m),
-      onclick: () => set({ mode: m.name }),
-    }, m.name))),
-    colours));
-}
-
-// Settings: what the RAM RGB switch is doing, updated on every poll like the
-// motherboard RGB one.
-function renderRamStatus() {
-  const r = state?.ram_rgb, on = !!cfg?.ram_rgb.enabled;
-  const msg = !on ? "For Corsair DDR5 sticks on an Intel board. Needs the Louver package's root helper (louver-ram), which alone touches the SMBus. While this is off, Louver never contacts it."
-    : r?.error ? "RAM RGB: " + r.error
-    : r?.connected ? `louver-ram linked · ${sticksLabel(r.sticks.length)}: ${r.sticks.map((st) => `${st.name} (${M.ramDetail(st)})`).join(", ")}. Colours aren't saved to the sticks.`
-    : "Asking the louver-ram helper for RAM sticks…";
-  const p = $("ram-status");
-  if (p.textContent !== msg) p.textContent = msg;
-}
-
 // Settings: what the motherboard RGB switch is doing. Updated on every poll
 // (renderStatus), since the board shows up or fails after the switch flips.
 function renderAuraStatus() {
@@ -1041,12 +982,9 @@ function renderSettings() {
   $("set-show-empty").checked = cfg.ui.show_empty_ports;
   $("set-aura").checked = cfg.motherboard_rgb.enabled;
   renderAuraStatus();
-  $("set-ram").checked = cfg.ram_rgb.enabled;
-  renderRamStatus();
   document.querySelectorAll("[data-app]").forEach((inp) => { inp.checked = !!cfg.app[inp.dataset.app]; });
 }
 $("set-aura").addEventListener("change", (e) => { cfg.motherboard_rgb.enabled = e.target.checked; save(0); renderAll(); });
-$("set-ram").addEventListener("change", (e) => { cfg.ram_rgb.enabled = e.target.checked; save(0); renderAll(); });
 document.querySelectorAll("[data-app]").forEach((inp) => inp.addEventListener("change", () => {
   cfg.app[inp.dataset.app] = inp.checked; save(0); renderSettings();
 }));

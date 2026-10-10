@@ -31,24 +31,6 @@ version, at commit b190d3e5afb6bd68b4bfa3e948947878d2bf1ba9:
                  Not ported: the save-to-device commit (it writes the
                  controller's flash) and direct per-LED mode.
 
-Its Corsair DDR5 RAM RGB driver (louver/corsair_dram.py) is a port to Python
-of OpenRGB's Corsair DRAM driver, GNU GPL version 2 or (at your option) any
-later version, at the same commit:
-
-  OpenRGB        https://gitlab.com/CalcProgrammer1/OpenRGB
-                 Controllers/CorsairDRAMController/
-                   CorsairDRAMController.h, .cpp (Adam Honse, Erik Gilling):
-                     the registers, the device-info read and the direct colour packet
-                   CorsairDRAMControllerDetect.cpp (Adam Honse, Erik Gilling):
-                     the identification test
-                   CorsairDRAMDevices.h, .cpp (Adam Honse):
-                     the product IDs and LED counts (the DDR5 entries)
-                   RGBController_CorsairDRAM.cpp (Adam Honse, Erik Gilling):
-                     direct mode only from protocol 4
-                 Not ported: the hardware effects and the non-direct colour
-                 path (both store their settings on the stick), the
-                 word-write fallback, the bootloader switch and DDR4.
-
 Bundled fonts, under the SIL Open Font License 1.1 (louver/web/fonts/):
   Unbounded     Copyright 2022 The Unbounded Project Authors
   Martian Mono  Copyright 2020 The Martian Mono Project Authors
@@ -58,9 +40,7 @@ Co., Ltd., named here only to say which hardware Louver works with. Louver is
 not a Lian Li product and is not affiliated with or endorsed by Lian Li.
 ASUS, Aura and ROG are trademarks of ASUSTeK Computer Inc., named here only to
 say which hardware Louver works with. Louver is not affiliated with or
-endorsed by ASUS. Corsair, Vengeance and Dominator are trademarks of Corsair
-Memory, Inc., named here only to say which hardware Louver works with. Louver
-is not affiliated with or endorsed by Corsair.
+endorsed by ASUS.
 
 ---- lian-li-linux licence ----
 

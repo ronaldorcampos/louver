@@ -13,11 +13,6 @@ each_user() {
 # Stopping hands the fans back (the on-exit setting) before the code goes.
 if [ "$1" = remove ]; then
     each_user stop louver.service
-    # The RAM helper stops too. Its enable link stays until postrm masks
-    # (remove) or purges (purge) it, as dh_installsystemd leaves it.
-    if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ] && command -v deb-systemd-invoke >/dev/null 2>&1; then
-        deb-systemd-invoke stop louver-ram.socket louver-ram.service >/dev/null || true
-    fi
 fi
 if command -v py3clean >/dev/null 2>&1; then
     py3clean -p louver

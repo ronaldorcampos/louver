@@ -19,7 +19,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-from . import aura, ramrgb
+from . import aura
 from . import config as cfgmod
 from .apiclient import MAX_BODY, check_length, socket_dir
 from .aura import AuraMainboard, HidrawAccess
@@ -27,7 +27,6 @@ from .curves import PRESETS, Governor, interpolate
 from .devices import DRIVERS, VENDOR_ID, LightingEffect, StrimerPlus, UniHubALV2, parse_color
 from .hidraw import HidrawTransport, enumerate_hidraw
 from .mbfans import MotherboardFans
-from .ramrgb import RamClient, RamHelperAccess, RamHelperError, RamStick
 from .rgbfx import SOFTWARE_MODES, render_hub_port, render_strimer_port
 from .sensors import SensorHub
 from .themes import THEMES, apply_theme
@@ -38,10 +37,6 @@ WEB_DIR = Path(__file__).with_name("web")
 RECONNECT_EVERY = 5.0
 KEEPALIVE_EVERY = 10.0
 TEMP_LIGHT_STEP = 2.0  # deg C a Temperature-mode colour must move before it's re-sent
-# RAM RGB: a scan the helper says might find more (I/O errors, a busy bus) is
-# asked for again after RECONNECT_EVERY, then twice as long each time, up to this.
-RAM_RESCAN_MAX = 300.0
-RAM_LOG_REPEAT = 600.0  # the same RAM RGB problem is logged again only after this long
 
 
 def open_devices(skip: frozenset[int] = frozenset()) -> dict[int, object]:
@@ -77,7 +72,6 @@ class Controller:
         clock: Callable[[], float] = time.monotonic,
         mbfans: MotherboardFans | None = None,
         aura_access=None,
-        ram_access=None,
     ):
         self.cfg = cfgmod.validate(cfg)
         # Bumped on every config change, so a window that's been open a while
@@ -114,20 +108,6 @@ class Controller:
         self._aura_dead = None  # node_id of a controller with nothing to drive: not retried
         self._aura_tried = -1e9  # last connect attempt
         self._aura_checked = -1e9  # last liveness check
-        # RAM RGB: the louver-ram root helper does the SMBus I/O; Louver only
-        # talks to its socket, and only while RAM RGB is turned on.
-        self.ram_access = ram_access if ram_access is not None else RamHelperAccess()
-        self.ram: RamClient | None = None
-        self.ram_sticks: list[RamStick] = []
-        self.ram_error = ""
-        self._ram_dead = False  # the helper found nothing to drive: not asked again until a re-enable
-        self._ram_next_try = -1e9  # next connect attempt
-        self._ram_rescan_next = False  # the next connect asks the helper to scan again
-        self._ram_rescan_at: float | None = None  # while connected: when to ask for a scan again
-        self._ram_backoff = RECONNECT_EVERY
-        self._ram_frames: dict[int, list] | None = None  # what each stick was last sent
-        self._ram_sent_at = -1e9
-        self._ram_logged = ("", -1e9)  # the last problem logged, and when
         self._last_connect = -1e9
         self._last_tick: float | None = None
         self._governors = [Governor() for _ in range(4)]
@@ -269,132 +249,6 @@ class Controller:
         if dev is not None:
             try:
                 dev.close()
-            except OSError:
-                pass
-
-    def _tick_ram(self, now: float) -> None:
-        """While there's no helper connection: try to connect, every
-        RECONNECT_EVERY (or on the rescan backoff). While there is one: send
-        the frame when it changed and every KEEPALIVE_EVERY, and ask for a
-        rescan when the last scan hit I/O errors."""
-        if not self.cfg["ram_rgb"]["enabled"]:
-            return
-        if self.ram is None:
-            if not self._ram_dead and now >= self._ram_next_try:
-                self._connect_ram(now, rescan=self._ram_rescan_next)
-            return
-        if self._ram_rescan_at is not None and now >= self._ram_rescan_at:
-            client = self.ram
-            try:
-                listing = client.list(rescan=True)
-            except (OSError, ValueError, RamHelperError) as e:
-                self._drop_ram(e)
-                return
-            self._take_ram_listing(client, listing, now)
-        if self.ram is not None:
-            self._push_ram(now)
-
-    def _connect_ram(self, now: float, rescan: bool = False) -> None:
-        self._ram_next_try = now + RECONNECT_EVERY
-        path = getattr(self.ram_access, "path", ramrgb.SOCKET_PATH)
-        try:
-            client = self.ram_access.connect()
-        except OSError as e:
-            self._ram_failed(ramrgb.connect_error(path, e))
-            return
-        try:
-            listing = client.list(rescan=rescan)
-        except (OSError, ValueError, RamHelperError) as e:
-            client.close()
-            self._ram_failed(f"the RAM helper didn't answer: {e}")
-            return
-        self._take_ram_listing(client, listing, now)
-        if self.ram is not None:
-            self._push_ram(now)
-
-    def _next_ram_backoff(self) -> float:
-        wait = self._ram_backoff
-        self._ram_backoff = min(RAM_RESCAN_MAX, wait * 2)
-        return wait
-
-    def _take_ram_listing(self, client: RamClient, listing: ramrgb.Listing, now: float) -> None:
-        """Use what the helper found: drive its sticks, and plan another scan
-        when it says one might find more."""
-        skipped = "; ".join(f"{addr:#04x}: {reason}" for addr, reason in listing.skipped)
-        if not listing.sticks:
-            # Closed, so the helper can exit when there's nothing to ask it again.
-            self.ram = client
-            self._close_ram()
-            why = (listing.error or "no stick found") + (f" ({skipped})" if skipped else "")
-            if listing.retry:
-                wait = self._next_ram_backoff()
-                self._ram_next_try, self._ram_rescan_next = now + wait, True
-                self._ram_failed(f"{why}; scanning again in {wait:.0f} s")
-            else:
-                self._ram_dead = True
-                self._ram_failed(f"{why}; not asked again until it's turned off and on")
-            return
-        if self.ram is not client:
-            log.info("RAM RGB: %d stick(s) on %s", len(listing.sticks), listing.bus)
-        if listing.sticks != self.ram_sticks:
-            self._ram_frames = None
-        self.ram, self.ram_sticks = client, listing.sticks
-        self.ram_error = ""
-        self._ram_rescan_next = False
-        if listing.retry:
-            wait = self._next_ram_backoff()
-            self._ram_rescan_at = now + wait
-            self._ram_log(f"some addresses didn't answer properly ({skipped}); scanning again in {wait:.0f} s")
-        else:
-            self._ram_rescan_at, self._ram_backoff = None, RECONNECT_EVERY
-
-    def _ram_log(self, msg: str) -> None:
-        """Retried every few seconds: log each new problem once, and the same
-        one again only after RAM_LOG_REPEAT."""
-        now = self._clock()
-        last, at = self._ram_logged
-        if msg != last or now - at >= RAM_LOG_REPEAT:
-            log.warning("RAM RGB: %s", msg)
-            self._ram_logged = (msg, now)
-
-    def _ram_failed(self, msg: str) -> None:
-        self._ram_log(msg)
-        self.ram_error = msg
-
-    def _push_ram(self, now: float) -> None:
-        client = self.ram
-        if client is None:
-            return
-        look = self.cfg["ram_rgb"]["lighting"]
-        frames = {st.addr: ramrgb.render(look, st.leds) for st in self.ram_sticks}
-        if frames == self._ram_frames and now - self._ram_sent_at < KEEPALIVE_EVERY:
-            return
-        try:
-            for addr, colors in frames.items():
-                client.set(addr, colors)
-        except RamHelperError as e:
-            if e.code == "too_soon":  # faster than the helper allows: the next tick sends it
-                self._ram_frames = None
-                return
-            self._drop_ram(e)
-            return
-        except (OSError, ValueError) as e:
-            self._drop_ram(e)
-            return
-        self._ram_frames, self._ram_sent_at = frames, now
-
-    def _drop_ram(self, err: Exception) -> None:
-        self._ram_log(f"disconnected, will reconnect: {err}")
-        self.ram_error = f"disconnected: {err}"
-        self._close_ram()
-
-    def _close_ram(self) -> None:
-        client, self.ram = self.ram, None
-        self.ram_sticks = []
-        self._ram_frames, self._ram_rescan_at = None, None
-        if client is not None:
-            try:
-                client.close()
             except OSError:
                 pass
 
@@ -572,7 +426,6 @@ class Controller:
             self._refresh_temperature_lighting()
             self._tick_motherboard(now, dt, floor)
             self._tick_aura(now)
-            self._tick_ram(now)
 
     def _tick_motherboard(self, now: float, dt: float, floor: int) -> None:
         if self.mb is None:
@@ -685,7 +538,6 @@ class Controller:
             except OSError as e:
                 self._drop("strimer", e)
             self._apply_aura_config(old["motherboard_rgb"], new["motherboard_rgb"])
-            self._apply_ram_config(old["ram_rgb"], new["ram_rgb"])
         self.tick()
         return new
 
@@ -710,21 +562,6 @@ class Controller:
             self._push_aura(self.aura, keys)
         except OSError as e:
             self._drop_aura(e)
-
-    def _apply_ram_config(self, old: dict, new: dict) -> None:
-        if not new["enabled"]:
-            self._close_ram()  # nothing more is sent: the sticks keep their last frame
-            self.ram_error = ""
-            self._ram_dead, self._ram_rescan_next, self._ram_rescan_at = False, False, None
-            self._ram_backoff, self._ram_logged = RECONNECT_EVERY, ("", -1e9)
-            return
-        if not old["enabled"]:
-            # Just turned on: ask now, for a fresh scan. Any other save leaves
-            # retries to _tick_ram's pace.
-            self._ram_dead = False
-            self._connect_ram(self._clock(), rescan=True)
-            return
-        self._push_ram(self._clock())  # sends only if the frame changed
 
     # --- Lighting Lab -------------------------------------------------------
     def lab_show(self, req: dict) -> None:
@@ -807,12 +644,6 @@ class Controller:
                     ],
                     "error": self.aura_error,
                 },
-                "ram_rgb": {
-                    "enabled": self.cfg["ram_rgb"]["enabled"],
-                    "connected": self.ram is not None,
-                    "sticks": [st.describe() for st in self.ram_sticks],
-                    "error": self.ram_error,
-                },
                 "error": self.error,
                 "config_rev": self.cfg_rev,
             }
@@ -825,7 +656,6 @@ class Controller:
             if self.aura is not None:  # its lights stay as they are
                 self.aura.close()
                 self.aura = None
-            self._close_ram()  # so do the sticks'
             if self.strimer is not None:
                 self.strimer.close()
                 self.strimer = None
@@ -871,7 +701,6 @@ def meta(ctrl: Controller) -> dict:
         "hub_lighting_modes": UniHubALV2.lighting_modes() + _SOFTWARE_META,
         "strimer_lighting_modes": StrimerPlus.lighting_modes() + _SOFTWARE_META,
         "aura_lighting_modes": AuraMainboard.lighting_modes(),
-        "ram_lighting_modes": ramrgb.lighting_modes(),
         "themes": [{"name": n, "swatch": t["swatch"]} for n, t in THEMES.items()],
         "sensors": ctrl.sensors.list(),
     }

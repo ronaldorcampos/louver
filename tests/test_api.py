@@ -415,6 +415,13 @@ def test_old_config_with_listen_loads_without_it(tmp_path):
     assert "listen" not in cfgmod.DEFAULTS
 
 
+def test_old_config_with_ram_rgb_loads_without_it(tmp_path):
+    p = tmp_path / "config.json"
+    p.write_text('{"ram_rgb": {"enabled": true, "lighting": {"mode": "Static", "colors": ["#ff0000"]}}}\n')
+    cfg = cfgmod.load(p)
+    assert "ram_rgb" not in cfg and "ram_rgb" not in cfgmod.DEFAULTS
+
+
 # ---------------- the client ----------------
 def test_call_gets_and_puts_json(server):  # noqa: F811
     r, sock = server
@@ -556,7 +563,7 @@ def test_proxy_serves_only_louver_app(uri, tmp_path):
     ("uri", "same"),
     [
         ("louver://app/", True),
-        ("louver://app/#ram", True),
+        ("louver://app/#aura", True),
         ("louver://APP/api/state?x=1", True),
         ("louver://app:8080/", False),
         ("louver://app@evil/", False),

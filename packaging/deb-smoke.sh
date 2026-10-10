@@ -17,17 +17,6 @@ expect() {  # expect WHAT GOT WANT
   fi
   echo "ok   $1"
 }
-wants=/etc/systemd/system/sockets.target.wants/louver-ram.socket
-mask=/etc/systemd/system/louver-ram.socket
-ram_socket() {  # ram_socket WHEN: enabled (and listening, with systemd running)
-  if command -v deb-systemd-helper >/dev/null 2>&1; then
-    expect "RAM socket enabled $1" "$(test -L $wants && echo yes || echo no)" "yes"
-    expect "RAM socket not masked $1" "$(test -L $mask && echo masked || echo no)" "no"
-  fi
-  if [ -d /run/systemd/system ]; then
-    expect "RAM socket listening $1" "$(systemctl is-active louver-ram.socket || true)" "active"
-  fi
-}
 lock_dir() {  # lock_dir WHEN: the machine-wide hardware lock's directory, made by postinst
   expect "lock dir conf installed $1" "$(grep -v '^#' /usr/lib/tmpfiles.d/louver.conf)" "d /run/louver 3770 root plugdev -"
   # postinst runs systemd-tmpfiles only with systemd running (else it's made at boot)
@@ -82,8 +71,6 @@ $sudo apt-get update -qq
 
 install_deb "$deb"
 expect "install" "$(status)" "ii $version"
-expect "RAM helper units installed" "$(ls /usr/lib/systemd/system/louver-ram.socket /usr/lib/systemd/system/louver-ram.service | wc -l)" "2"
-ram_socket "after install"
 lock_dir "after install"
 dpkg -s python3-gi gir1.2-webkit2-4.1 gir1.2-ayatanaappindicator3-0.1 >/dev/null  # Recommends resolved
 expect "not enabled for every account" "$(ls /etc/systemd/user/default.target.wants/ 2>/dev/null | grep -c louver || true)" "0"
@@ -96,24 +83,19 @@ sed -i "s/^Version: .*/Version: $version.1/" "$work/next/DEBIAN/control"
 dpkg-deb --root-owner-group -b "$work/next" "$work/next.deb" >/dev/null
 install_deb "$work/next.deb"
 expect "upgrade" "$(status)" "ii $version.1"
-ram_socket "after upgrade"
 lock_dir "after upgrade"
 run_installed
 
 $sudo apt-get remove -y -qq louver >/dev/null
 expect "remove" "$(status)" "rc $version.1"
 expect "remove takes the code" "$(test -e $pkg && echo present || echo gone)" "gone"
-if command -v deb-systemd-helper >/dev/null 2>&1; then
-  expect "remove masks the RAM socket" "$(readlink $mask || true)" "/dev/null"
-fi
 
 install_deb "$deb"  # reinstall after remove (dpkg calls it an upgrade from the rc state)
 expect "reinstall" "$(status)" "ii $version"
-ram_socket "after reinstall"
 lock_dir "after reinstall"
 run_installed
 
 $sudo apt-get purge -y -qq louver >/dev/null
 expect "purge" "$(status)" ""
-expect "purge leaves nothing" "$(ls -d $pkg /usr/bin/louver /usr/lib/systemd/user/louver.service /usr/lib/systemd/system/louver-ram.socket /usr/lib/systemd/system/louver-ram.service /usr/lib/udev/rules.d/70-louver.rules /usr/lib/tmpfiles.d/louver.conf $wants $mask 2>/dev/null | wc -l)" "0"
+expect "purge leaves nothing" "$(ls -d $pkg /usr/bin/louver /usr/lib/systemd/user/louver.service /usr/lib/udev/rules.d/70-louver.rules /usr/lib/tmpfiles.d/louver.conf 2>/dev/null | wc -l)" "0"
 echo "deb smoke test passed"

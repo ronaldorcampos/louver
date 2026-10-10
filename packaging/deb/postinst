@@ -31,9 +31,26 @@ if [ "$1" = configure ]; then
     # /run/louver now, not at the next boot: the machine-wide hardware lock's
     # directory (tmpfiles.d/louver.conf). Before the restarts below, so the
     # daemons they start take that lock too. Only with this system's systemd
-    # running, as for the RAM socket further down.
+    # running (not in a chroot, an image build or another root).
     if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ] && command -v systemd-tmpfiles >/dev/null 2>&1; then
         systemd-tmpfiles --create louver.conf >/dev/null || true
+    fi
+    # Earlier builds shipped a RAM RGB root helper (louver-ram.socket and
+    # .service), since removed. dpkg deletes its unit files, but the socket
+    # may still be listening, and its enable link and deb-systemd-helper
+    # state stay behind: stop it, then forget it. Nothing to do on a first
+    # install; harmless on an upgrade from a build without it.
+    if [ -n "$2" ]; then
+        if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ] && command -v deb-systemd-invoke >/dev/null 2>&1; then
+            deb-systemd-invoke stop louver-ram.socket louver-ram.service >/dev/null 2>&1 || true
+        fi
+        if command -v deb-systemd-helper >/dev/null 2>&1; then
+            deb-systemd-helper purge louver-ram.socket >/dev/null || true
+            deb-systemd-helper unmask louver-ram.socket >/dev/null || true
+        fi
+        if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+            systemctl --system daemon-reload || true
+        fi
     fi
     # An upgrade: running daemons move to the new code (and its web UI
     # files), under the new unit file if that changed too.
@@ -45,36 +62,5 @@ if [ "$1" = configure ]; then
         echo "Louver: if the Louver app is open, close its window, choose Quit from its tray icon, and open it again."
     fi
 fi
-
-# The RAM RGB helper's socket, the way dh_installsystemd does it: enabled on
-# first install, and an admin's `systemctl disable` (or mask) of it kept
-# across upgrades. It costs nothing while nobody connects: the helper only
-# starts (and only touches the SMBus) once a client connects.
-case "$1" in configure | abort-upgrade | abort-deconfigure | abort-remove)
-    if command -v deb-systemd-helper >/dev/null 2>&1; then
-        deb-systemd-helper unmask louver-ram.socket >/dev/null || true  # the mask postrm remove left
-        if deb-systemd-helper --quiet was-enabled louver-ram.socket; then
-            deb-systemd-helper enable louver-ram.socket >/dev/null || true
-        else
-            deb-systemd-helper update-state louver-ram.socket >/dev/null || true
-        fi
-    fi
-    # Start it only with this system's systemd running (not for an install
-    # into another root with DPKG_ROOT, in a chroot, an image build or a
-    # container without systemd). deb-systemd-invoke starts only enabled units
-    # and asks policy-rc.d first.
-    if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
-        if command -v systemctl >/dev/null 2>&1; then
-            systemctl --system daemon-reload >/dev/null || true
-        fi
-        if command -v deb-systemd-invoke >/dev/null 2>&1; then
-            deb-systemd-invoke start louver-ram.socket >/dev/null || true
-            if [ -n "$2" ]; then  # an upgrade: a running helper moves to the new code
-                deb-systemd-invoke try-restart louver-ram.service >/dev/null || true
-            fi
-        fi
-    fi
-    ;;
-esac
 
 exit 0
