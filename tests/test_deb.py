@@ -105,12 +105,13 @@ STUBS = {
 }
 # Never the real ones: the scripts' system-unit calls land here. Like the
 # real deb-systemd-helper, the stub refuses to run outside dpkg, and its
-# was-enabled answers as WAS_ENABLED says.
+# debian-installed (is the unit's state file there?) answers as
+# DSH_INSTALLED says.
 SYSTEMD_STUBS = {
     "systemctl": 'echo "systemctl $*" >> "$LOG"',
     "deb-systemd-helper": """[ -n "$DPKG_MAINTSCRIPT_PACKAGE" ] || exit 1
 echo "deb-systemd-helper $*" >> "$LOG"
-case "$*" in *was-enabled*) [ "$WAS_ENABLED" = yes ] ;; esac""",
+case "$*" in *debian-installed*) [ "$DSH_INSTALLED" = yes ] ;; esac""",
     "deb-systemd-invoke": 'echo "deb-systemd-invoke $*" >> "$LOG"',
     "systemd-tmpfiles": 'echo "systemd-tmpfiles $*" >> "$LOG"',
 }
@@ -145,7 +146,7 @@ def scripts(deb, tmp_path):
     running = tmp_path / "run-systemd-system"
     running.mkdir()
 
-    def run(script, *args, systemd=True, tools=True, was_enabled=True, dpkg_root=None):
+    def run(script, *args, systemd=True, tools=True, dsh_installed=False, dpkg_root=None):
         path = control / script
         assert path.stat().st_mode & 0o777 == 0o755
         text = path.read_text()
@@ -160,7 +161,7 @@ def scripts(deb, tmp_path):
             "PATH": ":".join(str(d) for d in ([stubs, systemd_stubs] if tools else [stubs]) + [basics]),
             "LOG": str(log),
             "DPKG_MAINTSCRIPT_PACKAGE": "louver",  # dpkg sets it
-            "WAS_ENABLED": "yes" if was_enabled else "no",
+            "DSH_INSTALLED": "yes" if dsh_installed else "no",
         }
         if dpkg_root is not None:
             env["DPKG_ROOT"] = dpkg_root
@@ -223,14 +224,18 @@ def test_postinst_creates_the_lock_dir_only_on_a_live_system(scripts, host, live
     )
 
 
+ASK_DSH = "deb-systemd-helper debian-installed louver-ram.socket"
+
+
 @pytest.mark.parametrize("host, live", HOSTS)
 def test_postinst_upgrade_stops_and_forgets_the_removed_ram_helper(scripts, host, live):
     # Earlier builds shipped louver-ram.socket, enabled and listening; dpkg
     # deletes its unit files but not the running socket or its enable state.
-    _, calls = scripts("postinst", "configure", "0.1.0", **host)
+    _, calls = scripts("postinst", "configure", "0.1.0", dsh_installed=True, **host)
     stop = ["deb-systemd-invoke stop louver-ram.socket louver-ram.service"]
     reload = ["systemctl --system daemon-reload"]
     assert _system(calls) == [
+        ASK_DSH,
         *(stop if live else []),
         "deb-systemd-helper purge louver-ram.socket",
         "deb-systemd-helper unmask louver-ram.socket",
@@ -238,8 +243,16 @@ def test_postinst_upgrade_stops_and_forgets_the_removed_ram_helper(scripts, host
     ]
 
 
+@pytest.mark.parametrize("host, live", HOSTS)
+def test_postinst_upgrade_without_its_state_leaves_systemd_alone(scripts, host, live):
+    # Already cleaned up, or never installed: no stop, no purge (whose sweep
+    # would remove empty /etc/systemd/system dirs), no daemon-reload.
+    _, calls = scripts("postinst", "configure", "0.1.0", **host)
+    assert _system(calls) == [ASK_DSH]
+
+
 def test_postinst_first_install_has_no_ram_helper_to_forget(scripts):
-    _, calls = scripts("postinst", "configure", "")
+    _, calls = scripts("postinst", "configure", "", dsh_installed=True)
     assert _system(calls) == []
 
 
@@ -253,7 +266,7 @@ def test_postinst_first_install_has_no_ram_helper_to_forget(scripts):
     ],
 )
 def test_scripts_go_on_without_the_systemd_tools(scripts, script, args):
-    _, calls = scripts(script, *args, tools=False)
+    _, calls = scripts(script, *args, tools=False, dsh_installed=True)
     assert _system(calls) == [] and not [c for c in calls if c.startswith("systemd-tmpfiles")]
 
 
@@ -267,8 +280,10 @@ def test_prerm_upgrade_leaves_daemons_running(scripts):
     assert calls == ["py3clean -p louver"]  # postinst try-restarts them on the new code
 
 
-def test_postrm_parses(scripts):
-    scripts("postrm", "purge")
+@pytest.mark.parametrize("action", ["remove", "purge"])
+def test_postrm_leaves_system_units_alone(scripts, action):
+    _, calls = scripts("postrm", action, dsh_installed=True)
+    assert _system(calls) == []  # no system units ship any more
 
 
 def test_ui_relaunch_keeps_isolated_mode(monkeypatch):
