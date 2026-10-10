@@ -171,3 +171,31 @@ test("parseHash / hashFor round-trip, reject junk", () => {
   for (const h of ["", "#", "#hub-4", "#mb-0", "#mb-17", "#hub-1x", "#Strimer"]) assert.equal(M.parseHash(h), null, h);
   assert.equal(M.hashFor("zone", null), null);
 });
+
+test("effectTag: what each effect does with colours", () => {
+  const tag = (kind, m) => M.effectTag(kind, m);
+  assert.equal(tag("hub", { name: "Static Colorful", inner: false, outer: true, max_colors: 4 }), "outer ring only · a colour per side");
+  // Colorful City takes a 6-colour palette: only the corner modes are per side.
+  assert.equal(tag("hub", { name: "Colorful City", inner: true, outer: true, max_colors: 6 }), "up to 6 colours");
+  assert.equal(tag("hub", { name: "Static", inner: true, outer: true, max_colors: 6 }), "a colour per fan");
+  assert.equal(tag("hub", { name: "Rainbow", inner: true, outer: true, max_colors: 0 }), "built-in colours");
+  assert.equal(tag("hub", { name: "Off", inner: true, outer: true, max_colors: 0 }), "LEDs off");
+  assert.equal(tag("hub", { name: "Gradient", software: true }), "2–6 colour stops");
+  // The Strimer has no rings, fans or corners.
+  assert.equal(tag("strimer", { name: "Static", max_colors: 1 }), "one colour");
+  assert.equal(tag("strimer", { name: "Static Colorful", max_colors: 4 }), "up to 4 colours");
+});
+
+test("isCorner: hub corner modes only", () => {
+  assert.equal(M.isCorner("hub", "Breathing Colorful"), true);
+  assert.equal(M.isCorner("hub", "Colorful City"), false);
+  assert.equal(M.isCorner("strimer", "Static Colorful"), false);
+});
+
+test("speedFoot: the sensor failsafe is only promised where it exists", () => {
+  const live = { temp: 45.4, percent: 50 };
+  assert.equal(M.speedFoot("hub", "curve", live), "Now 45° → 50% · if the sensor drops out, this port runs at 100%");
+  assert.equal(M.speedFoot("mb", "standard", live), "Now 45° → 50% · if the sensor drops out, this header runs at 100%");
+  assert.equal(M.speedFoot("hub", "quiet", { temp: null, percent: 100 }), "if the sensor drops out, this port runs at 100%");
+  for (const mode of ["manual", "mb_sync", "bios"]) assert.equal(M.speedFoot("hub", mode, live), "", mode);
+});

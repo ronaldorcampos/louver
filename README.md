@@ -9,8 +9,8 @@ library and talks to the controllers directly through `/dev/hidraw*`.
 
 **Fans (per port, 4 ports)**
 - Live RPM, duty and temperature for each port.
-- Modes: Quiet / Standard / High Speed / Full Speed presets, Fixed %, a custom
-  curve (draggable points), or **MB PWM Sync** (the motherboard header drives the port).
+- Modes: Quiet / Standard / High / Full presets, Manual (a fixed %), a custom
+  curve (draggable points), or **MB sync** (the motherboard header's PWM drives the port).
 - Temperature sources: CPU (coretemp/k10temp), GPU (`nvidia-smi` or amdgpu),
   any hwmon sensor, or "max of CPU / GPU".
 - Smoothing: speed rises quickly and falls slowly, so short load spikes don't

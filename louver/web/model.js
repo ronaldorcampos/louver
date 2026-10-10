@@ -189,10 +189,34 @@ function hashFor(view, sel) {
   return sel ? "#" + zoneKey(sel) : null;
 }
 
+// ---- labels ----
+// Hub corner modes take one colour per side (devices.py CORNER_MODES); a
+// name test would also catch Colorful City, which takes a 6-colour palette.
+const isCorner = (kind, name) => kind === "hub" && CORNER.has(name);
+const SOFT_TAGS = { Custom: "paint each LED", Gradient: "2–6 colour stops", Temperature: "colour follows a sensor" };
+// What an effect does with colours, shown under its name on the effect card.
+function effectTag(kind, m) {
+  if (m.software) return SOFT_TAGS[m.name] || "software";
+  const ring = kind === "hub" && m.inner === false ? "outer ring only · " : kind === "hub" && m.outer === false ? "inner ring only · " : "";
+  const c = m.name === "Off" ? "LEDs off" : !m.max_colors ? "built-in colours"
+    : isCorner(kind, m.name) ? "a colour per side"
+    : kind === "hub" && PER_FAN.has(m.name) ? "a colour per fan"
+    : m.max_colors === 1 ? "one colour" : `up to ${m.max_colors} colours`;
+  return ring + c;
+}
+// The Speed panel's footnote. Only temperature-driven modes have a sensor
+// failsafe (daemon._target); MB sync and BIOS say their piece elsewhere.
+function speedFoot(kind, mode, s) {
+  if (mode === "manual" || mode === "mb_sync" || mode === "bios") return "";
+  const now = s.temp == null || s.percent == null ? "" : `Now ${s.temp.toFixed(0)}° → ${s.percent}% · `;
+  return now + `if the sensor drops out, this ${kind === "hub" ? "port" : "header"} runs at 100%`;
+}
+
 return {
   OFF, UNSET, NO_READING, RAINBOW, MB_LIGHT, MB_ZERO_GRACE, clamp, normColor, gradientAt, thermalColor,
   hubFanPreview, strimerPreview, strimerPortPreview, ringCss, barCss,
   visiblePorts, mbCfg, sameZone, zoneKey, zones, nextZeroRuns, validSelection, parseHash, hashFor,
+  isCorner, effectTag, speedFoot,
 };
 })();
 if (typeof module !== "undefined") module.exports = LouverModel;

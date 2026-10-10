@@ -45,8 +45,8 @@ def test_read_only_motherboard_headers_are_left_out():
 def test_labels():
     z = tray.Zone("hub-0", "Side", "quiet", 900, False, 50)
     assert tray.zone_label(z) == "Side · Quiet · 900 rpm"
-    assert tray.zone_label(z._replace(mode="manual", manual_percent=42.4)) == "Side · Fixed 42% · 900 rpm"
-    assert tray.zone_label(z._replace(mode="mb_sync", failsafe=True)) == "⚠ Side · MB PWM Sync · 900 rpm"
+    assert tray.zone_label(z._replace(mode="manual", manual_percent=42.4)) == "Side · Manual 42% · 900 rpm"
+    assert tray.zone_label(z._replace(mode="mb_sync", failsafe=True)) == "⚠ Side · MB sync · 900 rpm"
 
 
 def test_status_line_shows_followed_temperatures():

@@ -1,7 +1,9 @@
 import json
+import re
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -204,6 +206,19 @@ def test_http_state_and_static(server):
     code, html = _req(port, "/")
     assert code == 200 and b"Louver" in html
     assert _req(port, "/../../etc/passwd")[0] == 404
+
+
+def test_http_serves_bundled_fonts(server):
+    _, port = server
+    css = (Path(__file__).parent.parent / "louver" / "web" / "style.css").read_text()
+    fonts = re.findall(r'url\("(/fonts/[^"]+)"\)', css)
+    assert sorted(fonts) == ["/fonts/martian-mono.woff2", "/fonts/unbounded.woff2"]
+    for path in fonts:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as resp:
+            assert resp.headers["Content-Type"] == "font/woff2"
+            assert resp.read(4) == b"wOF2"
+    # Only the whitelisted files: the licence texts next to them aren't served.
+    assert _req(port, "/fonts/LICENSE-unbounded.txt")[0] == 404
 
 
 def test_http_rejects_foreign_host_and_missing_header(server):

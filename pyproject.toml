@@ -17,7 +17,7 @@ louver = "louver.__main__:main"
 include = ["louver*"]
 
 [tool.setuptools.package-data]
-louver = ["web/*"]
+louver = ["web/*", "web/fonts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -4,115 +4,159 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Louver</title>
+<link rel="preload" href="/fonts/unbounded.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/martian-mono.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <div class="app">
   <aside class="sidebar">
     <div class="brand">
-      <svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><rect x="3" y="3" width="58" height="58" rx="12" fill="#1b1f29"/><path d="M8 22 V15 A8 8 0 0 1 15 7.5 H49 A8 8 0 0 1 56.5 15 V22" fill="none" stroke="#33c3f0" stroke-width="7" stroke-linecap="round"/><path d="M56.5 42 V49 A8 8 0 0 1 49 56.5 H15 A8 8 0 0 1 7.5 49 V42" fill="none" stroke="#ff3fd0" stroke-width="7" stroke-linecap="round"/><circle cx="32" cy="32" r="19" fill="#0d0f14"/><path fill="#eef1f6" d="M32 26.8 Q31.5 18.9 42.8 18.2 A17.5 17.5 0 0 1 46.6 22.4 Q45 26.9 34.9 27.7Z M37 30.4 Q44.3 27.5 48.4 38 A17.5 17.5 0 0 1 45.7 42.9 Q40.9 42.8 37 33.4Z M35.1 36.2 Q40.1 42.3 31.4 49.5 A17.5 17.5 0 0 1 25.8 48.4 Q24.5 43.8 32.2 37.2Z M28.9 36.2 Q24.7 42.9 15.2 36.8 A17.5 17.5 0 0 1 14.5 31.2 Q18.5 28.5 27.1 33.8Z M27.1 30.4 Q19.4 28.4 22.2 17.5 A17.5 17.5 0 0 1 27.4 15.1 Q31.2 18 28.8 27.9Z"/></svg>
-      <span>LOU<b>VER</b></span>
+      <svg class="logo" viewBox="0 0 48 48" aria-hidden="true" fill="none" stroke-width="4" stroke-linecap="round">
+        <path d="M11 7 Q21 24 11 41" stroke="var(--accent)"/>
+        <path d="M19 10 Q28 24 19 38" stroke="var(--accent)"/>
+        <path d="M27 13 Q35 24 27 35" stroke="#c9a6ff"/>
+        <path d="M35 16 Q42 24 35 32" stroke="var(--violet)"/>
+      </svg>
+      <span>louver<b>.</b></span>
     </div>
-    <div class="side-title">Zones</div>
-    <nav class="zones" id="zones" aria-label="Zones"></nav>
-    <div class="side-title">Themes <small id="theme-name"></small></div>
-    <div class="theme-dots" id="themes"></div>
-    <nav class="side-bottom">
+    <div class="nerve">
+      <svg aria-hidden="true" viewBox="0 0 20 340" preserveAspectRatio="none"><path d="M10 0 C 18 40, 2 70, 10 110 S 18 180, 10 220 S 2 300, 10 340" fill="none" stroke="var(--line)" stroke-width="2" stroke-dasharray="6 4" vector-effect="non-scaling-stroke"/></svg>
+      <nav class="zones" id="zones" aria-label="Zones"></nav>
+    </div>
+    <div class="side-foot">
       <button class="nav-item" id="nav-settings">Settings</button>
-    </nav>
-    <div class="devices" id="devices"></div>
+      <section class="devices" aria-label="Devices"><span>Devices</span><div id="devices"></div></section>
+    </div>
   </aside>
 
   <main>
-    <div class="banner hidden" id="banner"></div>
+    <div class="banner hidden" id="banner" role="status"></div>
 
     <!-- ZONE: one fan group (hub port, motherboard header) or the Strimer -->
     <section class="view" id="view-zone">
-      <div class="zone-head">
+      <header class="zone-head">
         <div class="zone-title">
-          <input class="name-input" id="zone-name" maxlength="20" aria-label="Zone name">
           <span class="zone-sub" id="zone-sub"></span>
+          <input class="name-input" id="zone-name" maxlength="20" aria-label="Zone name">
+          <div class="pills" id="zone-stats"></div>
         </div>
-        <div class="zone-stats" id="zone-stats"></div>
-      </div>
-      <div class="zone-fans" id="zone-fans"></div>
+        <div class="meter" id="duty-meter" role="meter" aria-label="Duty" aria-valuemin="0" aria-valuemax="100">
+          <div class="gills" id="duty-gills" aria-hidden="true"></div>
+          <span id="duty-label"></span>
+        </div>
+      </header>
 
-      <div class="panel" id="speed-panel">
-        <div class="panel-head">
-          <h2>Speed</h2>
-          <div class="row gap">
-            <label id="port-sensor-label">Follows <select id="port-sensor"></select></label>
-            <label id="port-fans-label">Fans on port <select id="port-fans"></select></label>
+      <nav class="tabs" id="zone-tabs" role="tablist" aria-label="Zone sections">
+        <button role="tab" data-tab="speed" id="tab-btn-speed" aria-controls="tab-speed">Speed</button>
+        <button role="tab" data-tab="light" id="tab-btn-light" aria-controls="tab-light">Lighting</button>
+      </nav>
+
+      <div class="split" id="tab-speed" role="tabpanel" aria-labelledby="tab-btn-speed">
+        <section class="panel wide" id="speed-panel" aria-labelledby="speed-h">
+          <div class="deco" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div class="panel-head">
+            <h2 id="speed-h">Speed</h2>
+            <div class="row gap">
+              <label id="port-sensor-label">Follows <select id="port-sensor"></select></label>
+              <label id="port-fans-label">Fans on port <select id="port-fans"></select></label>
+            </div>
           </div>
-        </div>
-        <div class="chips" id="mode-chips"></div>
-        <p class="hint hidden" id="mb-hint">BIOS control leaves this header on the board's own curve. Keep pump headers on BIOS control (or Full Speed).</p>
-        <div id="manual-box" class="hidden">
-          <label class="slider-label">Fixed speed <b id="manual-val"></b></label>
-          <input type="range" min="0" max="100" id="manual-range">
-        </div>
-        <div id="curve-box">
-          <svg id="curve" viewBox="0 0 640 300" preserveAspectRatio="none" role="img" aria-label="Fan curve"></svg>
-          <p class="hint" id="curve-hint"></p>
-        </div>
-        <div class="row end"><button class="btn ghost" id="apply-all">Use this speed setup on every hub port</button></div>
+          <div class="chips" id="mode-chips" role="group" aria-label="Speed mode"></div>
+          <p class="hint hidden" id="mb-hint">BIOS control leaves this header on the board's own curve. Keep pump headers on BIOS control (or Full).</p>
+          <div class="inset note hidden" id="sync-note">This port follows the motherboard's fan signal. Louver reads the speed but doesn't set it, so there's no curve or sensor here.</div>
+          <div id="manual-box" class="inset hidden">
+            <label class="row between" for="manual-range">Manual speed <b class="manual-val" id="manual-val"></b></label>
+            <input type="range" min="0" max="100" id="manual-range">
+          </div>
+          <div id="curve-box" class="field">
+            <div class="chart" id="chart">
+              <svg id="curve" viewBox="0 0 640 300" preserveAspectRatio="none" role="img" aria-label="Fan curve"></svg>
+              <span class="now hidden" id="curve-now"></span>
+            </div>
+            <p class="hint" id="curve-hint"></p>
+          </div>
+          <div class="row between">
+            <span class="hint" id="speed-foot"></span>
+            <button class="btn" id="apply-all">Use on every hub port</button>
+          </div>
+        </section>
+        <section class="panel alt" id="fans-panel" aria-labelledby="fans-h">
+          <h2 id="fans-h">Fans</h2>
+          <p class="hint hidden" id="fans-empty">No fans on this port. Set "Fans on port" to how many are plugged in.</p>
+          <div class="fan-list" id="zone-fans"></div>
+        </section>
       </div>
 
-      <div class="panel" id="light-panel">
-        <div class="panel-head">
-          <h2>Lighting</h2>
-          <div class="row gap" id="light-tools"></div>
-        </div>
-        <p class="hint hidden" id="mbsync-hint"></p>
-        <div id="light-controls"></div>
+      <div class="lighting" id="tab-light" role="tabpanel" aria-labelledby="tab-btn-light" style="display: grid; gap: 26px">
+        <div class="bar" id="light-tools"></div>
+        <div class="panel note hidden" id="mbsync-hint"></div>
+        <div id="light-controls" style="display: grid; gap: 26px"></div>
+        <section class="panel alt" aria-labelledby="themes-h">
+          <h2 id="themes-h">Themes <small id="theme-name"></small></h2>
+          <div class="themes" id="themes"></div>
+        </section>
+        <div id="light-effects"></div>
       </div>
     </section>
 
     <section class="view hidden" id="view-empty">
-      <h1>No fans found</h1>
-      <p class="hint">Nothing is connected yet: no hub ports with fans, no spinning motherboard headers, no Strimer.
-        Check the cables and the udev rules (see README), or show empty hub ports in Settings.</p>
+      <div class="empty">
+        <div class="gills" id="empty-gills" aria-hidden="true"></div>
+        <h1>No fans found</h1>
+        <p class="hint">Nothing is connected yet: no hub ports with fans, no spinning motherboard headers, no Strimer.
+          Check the cables and the udev rules (see README), or show empty hub ports in Settings.</p>
+        <button class="btn primary" id="empty-settings">Show empty hub ports</button>
+        <span class="live">Louver keeps looking · zones appear here as soon as something spins</span>
+      </div>
     </section>
 
     <!-- SETTINGS -->
     <section class="view hidden" id="view-settings">
-      <h1>Settings</h1>
-      <h3>Application</h3>
-      <div class="panel settings" id="app-settings">
-        <label class="toggle"><input type="checkbox" data-app="start_on_login"><span></span>Start on login</label>
-        <label class="toggle"><input type="checkbox" data-app="start_minimized"><span></span>Start minimized to the tray</label>
-        <label class="toggle"><input type="checkbox" data-app="close_to_tray"><span></span>Minimize to tray when the window is closed</label>
-        <p class="hint">Fan control runs as a background service either way; these only affect the window. The tray icon appears while the window is closed.</p>
+      <header class="zone-title">
+        <span class="zone-sub">Application and fan-control behaviour</span>
+        <h1>Settings</h1>
+      </header>
+      <div class="split">
+        <section class="panel settings" id="app-settings" aria-labelledby="app-h">
+          <h2 id="app-h">Application</h2>
+          <label class="toggle"><input type="checkbox" data-app="start_on_login"><span></span>Start on login</label>
+          <label class="toggle"><input type="checkbox" data-app="start_minimized"><span></span>Start minimized to the tray</label>
+          <label class="toggle"><input type="checkbox" data-app="close_to_tray"><span></span>Minimize to tray when the window is closed</label>
+          <p class="hint">Fan control runs as a background service either way; these only affect the window. The tray icon appears while the window is closed.</p>
+        </section>
+        <section class="panel alt settings" aria-labelledby="fan-h">
+          <h2 id="fan-h">Fan control</h2>
+          <label>Update interval <span class="unit"><input type="number" min="0.25" max="30" step="0.25" id="set-poll"><i>s</i></span></label>
+          <label>Minimum fan speed <span class="unit"><input type="number" min="0" max="100" id="set-min"><i>%</i></span></label>
+          <label>When Louver stops
+            <select id="set-exit">
+              <option value="mb_sync">Hand fans back to motherboard PWM</option>
+              <option value="fixed">Set a fixed speed</option>
+              <option value="hold">Keep the last speed</option>
+            </select>
+          </label>
+          <label id="exit-pct-row">Fixed speed on exit <span class="unit"><input type="number" min="0" max="100" id="set-exit-pct"><i>%</i></span></label>
+          <label class="toggle"><input type="checkbox" id="set-show-empty"><span></span>Show empty hub ports (0 fans) as zones</label>
+          <p class="warn-note">A zone on a preset or custom curve runs at 100% while its temperature sensor can't be read, until the sensor comes back.</p>
+        </section>
       </div>
-      <h3>Fan control</h3>
-      <div class="panel settings">
-        <label>Update interval (s) <input type="number" min="0.25" max="30" step="0.25" id="set-poll"></label>
-        <label>Minimum fan speed (%) <input type="number" min="0" max="100" id="set-min"></label>
-        <label>When Louver stops
-          <select id="set-exit">
-            <option value="mb_sync">Hand fans back to motherboard PWM</option>
-            <option value="fixed">Set a fixed speed</option>
-            <option value="hold">Keep the last speed</option>
-          </select>
-        </label>
-        <label id="exit-pct-row">Fixed speed on exit (%) <input type="number" min="0" max="100" id="set-exit-pct"></label>
-        <label class="toggle"><input type="checkbox" id="set-show-empty"><span></span>Show empty hub ports (0 fans) as zones</label>
-        <p class="hint">If a zone's temperature sensor can't be read, it runs at 100% until the sensor comes back.</p>
-      </div>
-      <h3>Advanced</h3>
       <details class="panel advanced" id="lab-details">
-        <summary>Lighting Lab: identify effect numbers on your firmware</summary>
-        <p class="hint">Hub firmware revisions number their effects differently. Step through effect numbers here,
-          watch the fans, and label what you see; labelled numbers replace the built-in guesses everywhere else.
-          Normal lighting returns when you press Done.</p>
-        <div class="light-panel" id="lab-panel"></div>
-        <h3>Verified effects</h3>
-        <div id="lab-map"></div>
+        <summary>Lighting Lab <small>· identify effect numbers on your firmware</small></summary>
+        <p class="hint">Hub firmware revisions number their effects differently. Step through effect numbers, watch the fans, and label what you see.
+          Labelled numbers replace the built-in guesses everywhere else. Normal lighting returns when you press Done.</p>
+        <div class="split lab-split">
+          <div class="inset lab" id="lab-panel"></div>
+          <div class="lab-table">
+            <div id="lab-map"></div>
+            <p class="hint"><b>#n ✓</b> your label (× removes it) · <b>✓ capture</b> matched an L-Connect capture · unverified = built-in guess · — not on that ring</p>
+          </div>
+        </div>
       </details>
     </section>
   </main>
 </div>
-<div class="toast hidden" id="toast"></div>
+<div class="toast hidden" id="toast" role="alert"><span></span><button aria-label="Dismiss" id="toast-close">×</button></div>
 <script src="/model.js"></script>
 <script src="/app.js"></script>
 </body>

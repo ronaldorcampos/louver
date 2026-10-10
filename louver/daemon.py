@@ -498,8 +498,9 @@ def meta(ctrl: Controller) -> dict:
 
 
 _STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/model.js": "model.js",
-           "/style.css": "style.css"}
-_CTYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css"}
+           "/style.css": "style.css", "/fonts/unbounded.woff2": "fonts/unbounded.woff2",
+           "/fonts/martian-mono.woff2": "fonts/martian-mono.woff2"}
+_CTYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".woff2": "font/woff2"}
 
 
 def make_handler(ctrl: Controller, allowed_hosts: set[str]):

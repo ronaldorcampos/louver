@@ -7,9 +7,10 @@ from __future__ import annotations
 from typing import NamedTuple
 
 # The quick speeds the tray offers; anything else is set in the window.
-SPEEDS = (("quiet", "Quiet"), ("standard", "Standard"), ("high", "High Speed"), ("full", "Full Speed"))
+# Labels match the window's mode chips (web/app.js MODE_LABELS).
+SPEEDS = (("quiet", "Quiet"), ("standard", "Standard"), ("high", "High"), ("full", "Full"))
 MODE_LABELS = {
-    **dict(SPEEDS), "manual": "Fixed", "curve": "Custom Curve", "mb_sync": "MB PWM Sync", "bios": "BIOS control",
+    **dict(SPEEDS), "manual": "Manual", "curve": "Custom curve", "mb_sync": "MB sync", "bios": "BIOS",
 }
 
 
@@ -46,7 +47,7 @@ def zones(cfg: dict, state: dict) -> list[Zone]:
 
 def mode_label(z: Zone) -> str:
     if z.mode == "manual":
-        return f"Fixed {z.manual_percent:.0f}%"
+        return f"Manual {z.manual_percent:.0f}%"
     return MODE_LABELS.get(z.mode, z.mode)
 
 

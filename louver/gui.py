@@ -112,6 +112,9 @@ class LouverApp(Gtk.Application):
             self.view.load_uri(self.base + "/" + hash_)  # same page, new #hash: no reload
         self.window.show_all()
         self.window.present()
+        # Without focus the page isn't active yet, and WebKit can spend the
+        # first click activating it instead of delivering it.
+        self.view.grab_focus()
         self._sync_tray_visibility()
 
     def build_window(self, hash_: str = "") -> Gtk.Window:
@@ -145,7 +148,7 @@ class LouverApp(Gtk.Application):
 
     def _load_failed(self, view, event, uri, error):
         view.load_html(
-            "<body style='font-family:sans-serif;background:#0f1115;color:#e7e9ee;padding:40px'>"
+            "<body style='font-family:sans-serif;background:#03110f;color:#dcfff4;padding:40px'>"
             "<h2>Louver service isn't running</h2><p>Start it with "
             "<code>systemctl --user start louver</code>. Retrying…</p></body>",
             None,
