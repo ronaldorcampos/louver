@@ -13,8 +13,6 @@ from pathlib import Path
 from .gui_ids import APP_ID
 
 MARKER = "X-Louver-Managed=true"
-# The entry this app wrote under its previous name, UniHub.
-LEGACY_ENTRY, LEGACY_MARKER = "unihub.desktop", "X-UniHub-Managed=true"
 
 
 def entry_path() -> Path:
@@ -29,9 +27,6 @@ def _launcher() -> str:
 
 def sync(enabled: bool, path: Path | None = None, launcher: str | None = None) -> None:
     path = path or entry_path()
-    legacy = path.parent / LEGACY_ENTRY
-    if legacy.exists() and LEGACY_MARKER in legacy.read_text(errors="replace"):
-        legacy.unlink()  # its Exec= points at the old launcher, which is gone
     if enabled:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(

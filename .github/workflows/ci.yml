@@ -75,6 +75,11 @@ jobs:
           test "$(ls dist | wc -l)" = 1
       - name: Publish (a1/b1/rc1 tags as pre-releases)
         run: |
+          # A moved tag (re-tagging a fix) replaces the .deb on its existing release.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.deb --repo "$GITHUB_REPOSITORY" --clobber
+            exit 0
+          fi
           pre=; if printf '%s\n' "$GITHUB_REF_NAME" | grep -Eq '(a|b|rc)[0-9]+$'; then pre=--prerelease; fi
           gh release create "$GITHUB_REF_NAME" dist/*.deb --repo "$GITHUB_REPOSITORY" \
             --title "Louver ${GITHUB_REF_NAME#v}" --generate-notes $pre

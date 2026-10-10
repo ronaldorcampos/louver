@@ -37,9 +37,7 @@ def _hardware_lock(what: str, hint: str):
     got = instance.try_acquire()
     if isinstance(got, instance.Lock):
         return got
-    if got.app == "UniHub":
-        hint = "That's this app's old install; run ./install.sh to replace it."
-    print(f"{what}: {got.app} is already running{f' (pid {got.pid})' if got.pid else ''}. {hint}", file=sys.stderr)
+    print(f"{what}: Louver is already running{f' (pid {got.pid})' if got.pid else ''}. {hint}", file=sys.stderr)
     return None
 
 
@@ -294,12 +292,6 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
     path = args.config or cfgmod.default_path()
-    if args.config is None:
-        try:
-            if cfgmod.migrate_legacy(path):
-                logging.info("copied the UniHub config to %s", path)
-        except OSError as e:
-            logging.warning("could not copy the old UniHub config: %s", e)
     try:
         cfg = cfgmod.load(path)
     except cfgmod.ConfigError as e:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import json
 import os
-import shutil
 from pathlib import Path
 
 from .curves import PRESETS, normalize
@@ -21,31 +20,6 @@ EXIT_ACTIONS = ("mb_sync", "hold", "fixed")
 def default_path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     return Path(base) / "louver" / "config.json"
-
-
-LEGACY_DIR = "unihub"  # the app's name before it became Louver
-
-
-def migrate_legacy(path: Path | None = None) -> bool:
-    """First run after the rename: copy ~/.config/unihub/config.json into place.
-
-    The old file stays put as a backup. Never overwrites an existing config,
-    even if another Louver process creates one at the same moment (os.link
-    refuses to replace an existing file)."""
-    path = path or default_path()
-    legacy = path.parent.parent / LEGACY_DIR / path.name
-    if path.exists() or not legacy.is_file():
-        return False
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.migrating.{os.getpid()}")
-    try:
-        shutil.copy2(legacy, tmp)
-        os.link(tmp, path)
-    except FileExistsError:
-        return False
-    finally:
-        tmp.unlink(missing_ok=True)
-    return True
 
 
 def _default_group(i: int) -> dict:
