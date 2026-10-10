@@ -12,6 +12,26 @@ library and talks to the controllers directly through `/dev/hidraw*`.
 > overheat. Watch your temperatures after any change. Louver comes with no
 > warranty (see [LICENSE](LICENSE)); use it at your own risk.
 
+## Compatible hardware
+
+| Device | How Louver finds it | Tested on |
+|---|---|---|
+| Lian Li **UNI HUB AL V2** (fans and their RGB) | USB `0cf2:a104` | firmware v0.4 |
+| Lian Li **Strimer Plus** (cable RGB) | USB `0cf2:a200` | firmware v1.5 |
+| **ASUS Aura USB** motherboard RGB (ARGB headers, onboard LEDs) | USB `0b05:18f3`, `0b05:1939`, `0b05:19af`, `0b05:1aa6`, `0b05:1bed` | `0b05:19af`, ROG STRIX Z790-A GAMING WIFI (AULA3-AR32-0309) |
+| **Motherboard fan headers** (Super I/O) | hwmon chips `nct6775`, `nct6776`, `nct6779`, `nct6791`-`nct6793`, `nct6795`-`nct6799`, `it87`, `it8686`, `it8688` | `nct6798`, ROG STRIX Z790-A GAMING WIFI |
+
+The Aura product IDs are the ones OpenRGB's ASUS Aura USB driver lists; only
+`19af` has run with Louver. To see whether a board has one:
+`lsusb -d 0b05:`, then `louver aura-probe` (read-only).
+
+Not supported:
+- **Other Lian Li controllers** (other UNI HUB models, other Strimers).
+- **Other boards' RGB:** MSI Mystic Light, Gigabyte RGB Fusion, ASRock
+  Polychrome and the like use different controllers.
+- **RAM RGB.** Corsair DDR5 support was tried and removed: Vengeance RGB DDR5
+  sticks refuse the direct colour frames OpenRGB sends them.
+
 ## Features
 
 **Fans (per port, 4 ports)**
