@@ -210,8 +210,10 @@ class Controller:
         s = self.strimer
         if s is not None and not self.cfg["strimer"]["mb_rgb_sync"]:
             stale = [
-                p for p, entry in enumerate(self._strimer_entries(s))
-                if entry["mode"] == "Temperature" and self._temp_key(self._light_temp(entry)) != self._strimer_temp_key[p]
+                p
+                for p, entry in enumerate(self._strimer_entries(s))
+                if entry["mode"] == "Temperature"
+                and self._temp_key(self._light_temp(entry)) != self._strimer_temp_key[p]
             ]
             if stale:
                 try:
@@ -313,8 +315,12 @@ class Controller:
             if g["mode"] == "manual":
                 gov.reset()
             pct = 100 if failsafe else int(round(gov.step(max(target, float(floor)), dt)))
-            st.update(percent=pct, temp=temp, failsafe=failsafe,
-                      missing=self.sensors.missing(g["sensor"]) if not failsafe else [])
+            st.update(
+                percent=pct,
+                temp=temp,
+                failsafe=failsafe,
+                missing=self.sensors.missing(g["sensor"]) if not failsafe else [],
+            )
             last = self._mb_sent.get(idx)
             if last is None or last[0] != pct or now - last[1] >= KEEPALIVE_EVERY:
                 try:
@@ -364,10 +370,15 @@ class Controller:
                             self._sent[i] = None
                         if old["hub"]["lighting"][i] != new["hub"]["lighting"][i]:
                             relight.append(i)
-                    if relight and any(i in relight for i in range(4) if old["hub"]["groups"][i]["fans"] != new["hub"]["groups"][i]["fans"]):
+                    if relight and any(
+                        i in relight
+                        for i in range(4)
+                        if old["hub"]["groups"][i]["fans"] != new["hub"]["groups"][i]["fans"]
+                    ):
                         # A cross-port gradient depends on every port's fan count.
                         relight += [
-                            i for i, e in enumerate(new["hub"]["lighting"])
+                            i
+                            for i, e in enumerate(new["hub"]["lighting"])
                             if e["mode"] == "Gradient" and e.get("span_all")
                         ]
                     if old["hub"]["mode_map"] != new["hub"]["mode_map"]:
@@ -396,14 +407,23 @@ class Controller:
         ring = req.get("ring", "inner")
         if ring not in ("inner", "outer"):
             raise cfgmod.ConfigError("ring must be inner or outer")
-        colors = [parse_color(c) for c in req.get("colors") or ["#ff0000", "#ffd400", "#00ff6a", "#0088ff", "#b000ff", "#ff00c8"]]
+        colors = [
+            parse_color(c)
+            for c in req.get("colors") or ["#ff0000", "#ffd400", "#00ff6a", "#0088ff", "#b000ff", "#ff00c8"]
+        ]
         with self.lock:
             if self.hub is None:
                 raise cfgmod.ConfigError("hub not connected")
             try:
-                self.hub.raw_effect(group, ring, int(req.get("mode", 1)), colors,
-                                    speed=int(req.get("speed", 2)), direction=str(req.get("direction", "cw")),
-                                    brightness=int(req.get("brightness", 4)))
+                self.hub.raw_effect(
+                    group,
+                    ring,
+                    int(req.get("mode", 1)),
+                    colors,
+                    speed=int(req.get("speed", 2)),
+                    direction=str(req.get("direction", "cw")),
+                    brightness=int(req.get("brightness", 4)),
+                )
             except OSError as e:
                 self._drop("hub", e)
                 raise cfgmod.ConfigError(f"hub I/O error: {e}") from None
@@ -497,9 +517,15 @@ def meta(ctrl: Controller) -> dict:
     }
 
 
-_STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/model.js": "model.js",
-           "/style.css": "style.css", "/fonts/unbounded.woff2": "fonts/unbounded.woff2",
-           "/fonts/martian-mono.woff2": "fonts/martian-mono.woff2"}
+_STATIC = {
+    "/": "index.html",
+    "/index.html": "index.html",
+    "/app.js": "app.js",
+    "/model.js": "model.js",
+    "/style.css": "style.css",
+    "/fonts/unbounded.woff2": "fonts/unbounded.woff2",
+    "/fonts/martian-mono.woff2": "fonts/martian-mono.woff2",
+}
 _CTYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".woff2": "font/woff2"}
 
 

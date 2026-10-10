@@ -12,8 +12,22 @@ from dataclasses import dataclass
 from pathlib import Path
 
 HWMON = Path("/sys/class/hwmon")
-SUPPORTED_CHIPS = ("nct6775", "nct6776", "nct6779", "nct6791", "nct6792", "nct6793",
-                   "nct6795", "nct6796", "nct6797", "nct6798", "nct6799", "it87", "it8686", "it8688")
+SUPPORTED_CHIPS = (
+    "nct6775",
+    "nct6776",
+    "nct6779",
+    "nct6791",
+    "nct6792",
+    "nct6793",
+    "nct6795",
+    "nct6796",
+    "nct6797",
+    "nct6798",
+    "nct6799",
+    "it87",
+    "it8686",
+    "it8688",
+)
 MANUAL = 1
 
 

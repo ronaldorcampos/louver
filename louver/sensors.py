@@ -81,7 +81,10 @@ class SensorHub:
             try:
                 out = subprocess.run(
                     [self._nvidia, "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
-                    capture_output=True, text=True, timeout=3, check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                    check=True,
                 ).stdout
                 vals = [float(x) for x in out.split()]
             except (OSError, subprocess.SubprocessError, ValueError):

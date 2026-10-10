@@ -77,7 +77,9 @@ class LouverApp(Gtk.Application):
         way back to a closed (or start-minimized) window, nothing more."""
         if self.indicator is not None:
             hidden = self.window is None or not self.window.get_visible()
-            self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE if hidden else AppIndicator.IndicatorStatus.PASSIVE)
+            self.indicator.set_status(
+                AppIndicator.IndicatorStatus.ACTIVE if hidden else AppIndicator.IndicatorStatus.PASSIVE
+            )
 
     @property
     def tray_on(self) -> bool:

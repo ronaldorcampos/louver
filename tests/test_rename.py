@@ -101,7 +101,9 @@ def test_a_copy_that_fails_partway_leaves_no_temp_file(tmp_path, monkeypatch):
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can read a mode-000 file")
 def test_unreadable_old_config_warns_and_carries_on(tmp_path, monkeypatch, caplog):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    monkeypatch.setitem(cfgmod.DEFAULTS, "listen", "127.0.0.1:1")  # it falls back to defaults; never reach a real daemon
+    monkeypatch.setitem(
+        cfgmod.DEFAULTS, "listen", "127.0.0.1:1"
+    )  # it falls back to defaults; never reach a real daemon
     old = old_config(tmp_path, '{"listen": "127.0.0.1:1"}\n')
     old.chmod(0)
     try:

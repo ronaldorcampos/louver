@@ -107,7 +107,15 @@ ALV2_OUTER_MODES: dict[str, int] = {
 }  # fmt: skip
 
 VERIFIED_INNER = {"Static", "Breathing", "Rainbow", "Meteor", "Meteor Rainbow", "Pac-Man", "Lottery", "Runway"}
-VERIFIED_OUTER = {"Static", "Breathing", "Runway", "Color Cycle", "Wave", "Mixing", "Rainbow"}  # Rainbow: seen animating on hardware
+VERIFIED_OUTER = {
+    "Static",
+    "Breathing",
+    "Runway",
+    "Color Cycle",
+    "Wave",
+    "Mixing",
+    "Rainbow",
+}  # Rainbow: seen animating on hardware
 
 PER_FAN_MODES = {"Static", "Breathing"}
 CORNER_MODES = {"Static Colorful", "Breathing Colorful"}
@@ -309,8 +317,14 @@ class UniHubALV2(_Device):
             self._commit()
 
     def raw_effect(
-        self, group: int, ring: str, mode: int, colors: Sequence[Color], speed: int = 2,
-        direction: str = "cw", brightness: int = 4,
+        self,
+        group: int,
+        ring: str,
+        mode: int,
+        colors: Sequence[Color],
+        speed: int = 2,
+        direction: str = "cw",
+        brightness: int = 4,
     ) -> None:
         """Lighting Lab: run an arbitrary effect number on one ring."""
         self._check_group(group)
@@ -323,8 +337,13 @@ class UniHubALV2(_Device):
         buf = per_led if mode in (1, 2) else pal
         with self.lock:
             self._output(bytes([0x30 | port]) + _encode_colors(buf))
-            self._feature(0x10 | port, mode, _speed_byte(speed), _direction_byte(direction),
-                          _brightness_byte(brightness, off_value=8))
+            self._feature(
+                0x10 | port,
+                mode,
+                _speed_byte(speed),
+                _direction_byte(direction),
+                _brightness_byte(brightness, off_value=8),
+            )
             self._commit()
 
     @staticmethod
@@ -336,7 +355,13 @@ class UniHubALV2(_Device):
                 "inner": n in ALV2_INNER_MODES,
                 "outer": n in ALV2_OUTER_MODES,
                 "verified": {"inner": n in VERIFIED_INNER, "outer": n in VERIFIED_OUTER},
-                "max_colors": 4 if n in CORNER_MODES else (UniHubALV2.MAX_FANS if n in PER_FAN_MODES else (0 if "Rainbow" in n or n == "Off" else UniHubALV2.PALETTE)),
+                "max_colors": 4
+                if n in CORNER_MODES
+                else (
+                    UniHubALV2.MAX_FANS
+                    if n in PER_FAN_MODES
+                    else (0 if "Rainbow" in n or n == "Off" else UniHubALV2.PALETTE)
+                ),
             }
             for n in names
         ]
@@ -450,7 +475,12 @@ class StrimerPlus(_Device):
     @staticmethod
     def lighting_modes() -> list[dict]:
         return [
-            {"name": n, "max_colors": 1 if n in PER_FAN_MODES else (0 if n in ("Off", "Rainbow", "Rainbow Morph", "Bullet Stack", "Twinkle") else 6)}
+            {
+                "name": n,
+                "max_colors": 1
+                if n in PER_FAN_MODES
+                else (0 if n in ("Off", "Rainbow", "Rainbow Morph", "Bullet Stack", "Twinkle") else 6),
+            }
             for n in STRIMER_MODES
         ]
 

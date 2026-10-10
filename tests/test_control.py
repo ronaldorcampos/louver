@@ -144,7 +144,8 @@ def test_io_error_drops_device_then_reconnects():
 def test_apply_config_pushes_only_changed_things():
     r = Rig()
     r.ctrl.tick()
-    r.hub_t.features.clear(); r.hub_t.outputs.clear()
+    r.hub_t.features.clear()
+    r.hub_t.outputs.clear()
     new = json.loads(json.dumps(r.ctrl.cfg))
     new["hub"]["lighting"][2]["mode"] = "Static"
     new["hub"]["groups"][0]["mode"] = "mb_sync"
@@ -179,22 +180,30 @@ def server():
     # bind an ephemeral port: serve() needs a concrete one, so pick it first
     import socket
 
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
     httpd = serve(r.ctrl, f"127.0.0.1:{port}")
     yield r, port
     httpd.shutdown()
 
 
 def _req(port, path, body=None, headers=None, host=None):
-    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method="GET" if body is None else "PUT",
-                                 data=None if body is None else json.dumps(body).encode())
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        method="GET" if body is None else "PUT",
+        data=None if body is None else json.dumps(body).encode(),
+    )
     for k, v in (headers or {}).items():
         req.add_header(k, v)
     if host:
         req.add_header("Host", host)
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
-            return resp.status, json.loads(resp.read()) if resp.headers["Content-Type"] == "application/json" else resp.read()
+            return resp.status, json.loads(resp.read()) if resp.headers[
+                "Content-Type"
+            ] == "application/json" else resp.read()
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read())
 

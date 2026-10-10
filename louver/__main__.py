@@ -1,13 +1,13 @@
 """louver command line.
 
-  louver daemon            run fan control + the web UI (127.0.0.1:47321)
-  louver app [--autostart] the desktop app: window + tray icon
-  louver ui                open the desktop app (falls back to a browser window)
-  louver status            show RPM / duty / temps from the running daemon
-  louver set PORT PERCENT  put a port in manual mode at PERCENT (via daemon)
-  louver probe             read-only hardware check, no daemon needed
-  louver mb-list           motherboard fan headers: RPM, PWM, mode (read-only)
-  louver mb-test N PCT     run motherboard header N at PCT for a few seconds, then hand it back to BIOS
+louver daemon            run fan control + the web UI (127.0.0.1:47321)
+louver app [--autostart] the desktop app: window + tray icon
+louver ui                open the desktop app (falls back to a browser window)
+louver status            show RPM / duty / temps from the running daemon
+louver set PORT PERCENT  put a port in manual mode at PERCENT (via daemon)
+louver probe             read-only hardware check, no daemon needed
+louver mb-list           motherboard fan headers: RPM, PWM, mode (read-only)
+louver mb-test N PCT     run motherboard header N at PCT for a few seconds, then hand it back to BIOS
 """
 
 from __future__ import annotations
@@ -115,17 +115,32 @@ def cmd_ui(args, cfg: dict, path: Path) -> int:
     try:
         import gi  # noqa: F401  (desktop app available?)
 
-        subprocess.Popen([sys.executable, "-m", "louver", "app"], start_new_session=True,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(
+            [sys.executable, "-m", "louver", "app"],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         return 0
     except ImportError:
         pass
     url = _url(cfg, "/")
-    for browser in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "brave-browser", "microsoft-edge"):
+    for browser in (
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium",
+        "chromium-browser",
+        "brave-browser",
+        "microsoft-edge",
+    ):
         exe = shutil.which(browser)
         if exe:
-            subprocess.Popen([exe, f"--app={url}", "--class=louver"], start_new_session=True,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(
+                [exe, f"--app={url}", "--class=louver"],
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
             return 0
     subprocess.Popen(["xdg-open", url], start_new_session=True)
     return 0
@@ -142,8 +157,11 @@ def cmd_status(args, cfg: dict, path: Path) -> int:
     for i, (g, gc) in enumerate(zip(hub["groups"], cfg["hub"]["groups"])):
         pct = "MB" if g["percent"] is None else f"{g['percent']:>3}%"
         temp = "  -  " if g["temp"] is None else f"{g['temp']:4.1f}C"
-        flag = "  FAILSAFE (no temp)" if g["failsafe"] else (
-            f"  (unreadable: {', '.join(g['missing'])})" if g.get("missing") else "")
+        flag = (
+            "  FAILSAFE (no temp)"
+            if g["failsafe"]
+            else (f"  (unreadable: {', '.join(g['missing'])})" if g.get("missing") else "")
+        )
         print(f"  {gc['name']:<12} {gc['mode']:<9} {pct}  {g['rpm']:>5} rpm  {temp}{flag}")
     s = st["strimer"]
     print(f"{s['name']}: {'connected' if s['connected'] else 'not connected'} {s['firmware']}")
@@ -181,8 +199,10 @@ def cmd_probe(args, cfg: dict, path: Path) -> int:
         try:
             if isinstance(dev, UniHubALV2):
                 fw = dev.read_firmware()
-                print(f"  firmware {fw.version}  ids={fw.customer_id:#04x},{fw.project_id:#04x},"
-                      f"{fw.major_id:#04x},{fw.minor_id:#04x}  {'OK' if fw.valid_alv2 else 'UNEXPECTED'}")
+                print(
+                    f"  firmware {fw.version}  ids={fw.customer_id:#04x},{fw.project_id:#04x},"
+                    f"{fw.major_id:#04x},{fw.minor_id:#04x}  {'OK' if fw.valid_alv2 else 'UNEXPECTED'}"
+                )
                 print(f"  rpm per port: {dev.read_rpms()}")
             elif isinstance(dev, StrimerPlus):
                 print(f"  firmware {dev.read_firmware()}  ports={dev.PORTS_PER_CHANNEL}+{dev.read_channel2_ports()}")
@@ -208,7 +228,9 @@ def cmd_mb_list(args, cfg: dict, path: Path) -> int:
     for d in mb.describe():
         name, mode = names.get(d["index"], ("", "bios"))
         auto = "manual" if d["enable"] == 1 else f"auto({d['enable']})"
-        print(f"  header {d['index']}: {d['rpm']:>5} rpm  pwm {d['pwm']:>3}/255 ({round((d['pwm'] or 0) / 2.55):>3}%)  {auto:<8} {mode:<8} {name}")
+        print(
+            f"  header {d['index']}: {d['rpm']:>5} rpm  pwm {d['pwm']:>3}/255 ({round((d['pwm'] or 0) / 2.55):>3}%)  {auto:<8} {mode:<8} {name}"
+        )
     return 0
 
 
@@ -217,7 +239,9 @@ def cmd_mb_test(args, cfg: dict, path: Path) -> int:
 
     from .mbfans import MotherboardFans
 
-    lock = _hardware_lock("louver mb-test", "Stop it first so the two don't fight over the header: systemctl --user stop louver")
+    lock = _hardware_lock(
+        "louver mb-test", "Stop it first so the two don't fight over the header: systemctl --user stop louver"
+    )
     if lock is None:
         return ALREADY_RUNNING
     mb = MotherboardFans()
@@ -262,8 +286,9 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("percent", type=int, choices=range(0, 101), metavar="PERCENT")
     t.add_argument("--seconds", type=int, default=10)
     args = p.parse_args(argv)
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
-                        format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
     path = args.config or cfgmod.default_path()
     if args.config is None:
         try:
@@ -276,10 +301,16 @@ def main(argv: list[str] | None = None) -> int:
     except cfgmod.ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         return 2
-    return {"daemon": cmd_daemon, "ui": cmd_ui, "status": cmd_status, "set": cmd_set, "probe": cmd_probe, "app": cmd_app,
-            "mb-list": cmd_mb_list, "mb-test": cmd_mb_test}[args.cmd](
-        args, cfg, path
-    )
+    return {
+        "daemon": cmd_daemon,
+        "ui": cmd_ui,
+        "status": cmd_status,
+        "set": cmd_set,
+        "probe": cmd_probe,
+        "app": cmd_app,
+        "mb-list": cmd_mb_list,
+        "mb-test": cmd_mb_test,
+    }[args.cmd](args, cfg, path)
 
 
 if __name__ == "__main__":

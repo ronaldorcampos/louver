@@ -75,7 +75,8 @@ def test_outer_only_modes_skip_inner_ring_and_rainbow_maps_per_ring():
     h, t = hub()
     h.set_lighting(0, LightingEffect(mode="Tornado"))  # outer-only
     assert [o[1] for o in t.outputs] == [0x31]
-    t.features.clear(); t.outputs.clear()
+    t.features.clear()
+    t.outputs.clear()
     h.set_lighting(0, LightingEffect(mode="Rainbow", speed=4, brightness=-1, direction="ccw"))
     assert t.features[0] == Z([0xE0, 0x10, 5, 0xFE, 1, 8])
     assert t.features[1] == Z([0xE0, 0x11, 5, 0xFE, 1, 8])  # outer ring: v0.4 numbering

@@ -61,9 +61,18 @@ def _default_group(i: int) -> dict:
 
 def _default_light() -> dict:
     return {
-        "mode": "Rainbow", "ring": "both", "colors": ["#ff0000"], "speed": 2, "brightness": 4,
-        "direction": "cw", "sensor": "cpu", "temp_range": [35, 85], "span_all": False, "custom": {},
+        "mode": "Rainbow",
+        "ring": "both",
+        "colors": ["#ff0000"],
+        "speed": 2,
+        "brightness": 4,
+        "direction": "cw",
+        "sensor": "cpu",
+        "temp_range": [35, 85],
+        "span_all": False,
+        "custom": {},
     }
+
 
 STRIMER_PORTS = 12
 

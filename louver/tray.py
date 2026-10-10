@@ -10,7 +10,11 @@ from typing import NamedTuple
 # Labels match the window's mode chips (web/app.js MODE_LABELS).
 SPEEDS = (("quiet", "Quiet"), ("standard", "Standard"), ("high", "High"), ("full", "Full"))
 MODE_LABELS = {
-    **dict(SPEEDS), "manual": "Manual", "curve": "Custom curve", "mb_sync": "MB sync", "bios": "BIOS",
+    **dict(SPEEDS),
+    "manual": "Manual",
+    "curve": "Custom curve",
+    "mb_sync": "MB sync",
+    "bios": "BIOS",
 }
 
 
@@ -32,16 +36,32 @@ def zones(cfg: dict, state: dict) -> list[Zone]:
     for i, g in enumerate(cfg["hub"]["groups"]):
         if g["fans"] > 0:
             s = groups[i] if i < len(groups) else {}
-            out.append(Zone(f"hub-{i}", g["name"], g["mode"], int(s.get("rpm") or 0), bool(s.get("failsafe")),
-                            g["manual_percent"]))
+            out.append(
+                Zone(
+                    f"hub-{i}",
+                    g["name"],
+                    g["mode"],
+                    int(s.get("rpm") or 0),
+                    bool(s.get("failsafe")),
+                    g["manual_percent"],
+                )
+            )
     mb = state.get("motherboard") or {}
     if mb.get("present") and mb.get("writable"):
         live = {h["index"]: h for h in mb.get("headers", [])}
         for h in sorted(cfg["motherboard"]["headers"], key=lambda h: h["index"]):
             s = live.get(h["index"])
             if s is not None and h["mode"] != "bios":
-                out.append(Zone(f"mb-{h['index']}", h["name"], h["mode"], int(s.get("rpm") or 0),
-                                bool(s.get("failsafe")), h["manual_percent"]))
+                out.append(
+                    Zone(
+                        f"mb-{h['index']}",
+                        h["name"],
+                        h["mode"],
+                        int(s.get("rpm") or 0),
+                        bool(s.get("failsafe")),
+                        h["manual_percent"],
+                    )
+                )
     return out
 
 
@@ -84,4 +104,8 @@ def signature(cfg: dict | None, state: dict | None, themes: list[str]) -> tuple:
     the live rpm/temperature text), so the menu is rebuilt only when needed."""
     if cfg is None or state is None:
         return ("down", tuple(themes))
-    return (tuple((z.key, z.name, z.mode, z.manual_percent) for z in zones(cfg, state)), cfg.get("theme"), tuple(themes))
+    return (
+        tuple((z.key, z.name, z.mode, z.manual_percent) for z in zones(cfg, state)),
+        cfg.get("theme"),
+        tuple(themes),
+    )

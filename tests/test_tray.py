@@ -16,20 +16,31 @@ def _cfg(**over):
     return cfgmod.validate(cfg)
 
 
-def _state(rpms=(900, 0, 1100, 700), temps=(51.0, None, 51.0, None), headers=(), connected=True, writable=True,
-           failsafe=()):
+def _state(
+    rpms=(900, 0, 1100, 700), temps=(51.0, None, 51.0, None), headers=(), connected=True, writable=True, failsafe=()
+):
     return {
-        "hub": {"connected": connected, "groups": [
-            {"rpm": r, "temp": t, "failsafe": i in failsafe} for i, (r, t) in enumerate(zip(rpms, temps))]},
-        "motherboard": {"present": True, "writable": writable,
-                        "headers": [{"index": i, "rpm": r, "temp": t, "failsafe": False} for i, r, t in headers]},
+        "hub": {
+            "connected": connected,
+            "groups": [{"rpm": r, "temp": t, "failsafe": i in failsafe} for i, (r, t) in enumerate(zip(rpms, temps))],
+        },
+        "motherboard": {
+            "present": True,
+            "writable": writable,
+            "headers": [{"index": i, "rpm": r, "temp": t, "failsafe": False} for i, r, t in headers],
+        },
     }
 
 
 # ---------------- what the tray lists ----------------
 def test_zones_are_ports_with_fans_and_louver_controlled_headers():
-    cfg = _cfg(headers=[{"index": 7, "mode": "bios"}, {"index": 2, "mode": "curve", "name": "Top"},
-                        {"index": 5, "mode": "quiet"}])
+    cfg = _cfg(
+        headers=[
+            {"index": 7, "mode": "bios"},
+            {"index": 2, "mode": "curve", "name": "Top"},
+            {"index": 5, "mode": "quiet"},
+        ]
+    )
     st = _state(headers=[(2, 1450, 40.0), (7, 3020, None)])  # 5 is configured but the board doesn't report it
     zs = tray.zones(cfg, st)
     assert [z.key for z in zs] == ["hub-0", "hub-2", "hub-3", "mb-2"]  # no empty port, no BIOS pump, no ghost
@@ -39,7 +50,11 @@ def test_zones_are_ports_with_fans_and_louver_controlled_headers():
 
 def test_read_only_motherboard_headers_are_left_out():
     cfg = _cfg(headers=[{"index": 2, "mode": "curve"}])
-    assert [z.key for z in tray.zones(cfg, _state(headers=[(2, 1450, 40.0)], writable=False))] == ["hub-0", "hub-2", "hub-3"]
+    assert [z.key for z in tray.zones(cfg, _state(headers=[(2, 1450, 40.0)], writable=False))] == [
+        "hub-0",
+        "hub-2",
+        "hub-3",
+    ]
 
 
 def test_labels():
@@ -64,11 +79,14 @@ def test_signature_ignores_live_readings_but_not_choices():
     cfg, themes = _cfg(), ["Aurora", "Stealth"]
     base = tray.signature(cfg, _state(), themes)
     assert tray.signature(cfg, _state(rpms=(1, 2, 3, 4), temps=(80.0,) * 4), themes) == base
-    moved = json.loads(json.dumps(cfg)); moved["hub"]["groups"][0]["mode"] = "full"
+    moved = json.loads(json.dumps(cfg))
+    moved["hub"]["groups"][0]["mode"] = "full"
     assert tray.signature(moved, _state(), themes) != base
-    themed = json.loads(json.dumps(cfg)); themed["theme"] = "Stealth"
+    themed = json.loads(json.dumps(cfg))
+    themed["theme"] = "Stealth"
     assert tray.signature(themed, _state(), themes) != base
-    renamed = json.loads(json.dumps(cfg)); renamed["hub"]["groups"][2]["name"] = "Top"
+    renamed = json.loads(json.dumps(cfg))
+    renamed["hub"]["groups"][2]["name"] = "Top"
     assert tray.signature(renamed, _state(), themes) != base
     assert tray.signature(None, None, themes) != base
 
@@ -85,11 +103,26 @@ def test_set_zone_mode_hub_and_header():
     assert {h["index"]: h["mode"] for h in out["motherboard"]["headers"]} == {2: "curve", 9: "high"}
 
 
-@pytest.mark.parametrize("zone, mode", [
-    ("hub-4", "quiet"), ("hub--1", "quiet"), ("hub-01", "quiet"), ("hub-", "quiet"), ("mb-0", "quiet"),
-    ("mb-17", "quiet"), ("strimer", "quiet"), ("fan-1", "quiet"), (None, "quiet"), (["hub-0"], "quiet"),
-    ("hub-0", "bios"), ("mb-2", "mb_sync"), ("hub-0", "turbo"), ("hub-0", None), ("hub-0", ["quiet"]),
-])
+@pytest.mark.parametrize(
+    "zone, mode",
+    [
+        ("hub-4", "quiet"),
+        ("hub--1", "quiet"),
+        ("hub-01", "quiet"),
+        ("hub-", "quiet"),
+        ("mb-0", "quiet"),
+        ("mb-17", "quiet"),
+        ("strimer", "quiet"),
+        ("fan-1", "quiet"),
+        (None, "quiet"),
+        (["hub-0"], "quiet"),
+        ("hub-0", "bios"),
+        ("mb-2", "mb_sync"),
+        ("hub-0", "turbo"),
+        ("hub-0", None),
+        ("hub-0", ["quiet"]),
+    ],
+)
 def test_set_zone_mode_rejects(zone, mode):
     with pytest.raises(cfgmod.ConfigError):
         cfgmod.set_zone_mode(_cfg(), zone, mode)
@@ -100,7 +133,9 @@ def test_http_zone_mode(server):  # noqa: F811
     r, port = server
     rev = r.ctrl.state()["config_rev"]
     code, cfg = _req(port, "/api/zone-mode", body={"zone": "hub-1", "mode": "high"}, headers={"X-Louver": "1"})
-    assert code == 200 and cfg["hub"]["groups"][1]["mode"] == "high" and r.ctrl.cfg["hub"]["groups"][1]["mode"] == "high"
+    assert (
+        code == 200 and cfg["hub"]["groups"][1]["mode"] == "high" and r.ctrl.cfg["hub"]["groups"][1]["mode"] == "high"
+    )
     assert r.ctrl.state()["config_rev"] == rev + 1
     code, err = _req(port, "/api/zone-mode", body={"zone": "hub-9", "mode": "high"}, headers={"X-Louver": "1"})
     assert code == 400 and "unknown zone" in err["error"]

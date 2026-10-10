@@ -70,7 +70,8 @@ def test_every_theme_validates_and_controller_applies_it():
         assert cfg["theme"] == name
     r = Rig()
     r.ctrl.tick()
-    r.hub_t.outputs.clear(); r.str_t.outputs.clear()
+    r.hub_t.outputs.clear()
+    r.str_t.outputs.clear()
     r.ctrl.apply_config(apply_theme(r.ctrl.cfg, "Cyberpunk"))
     inner = [o for o in r.hub_t.outputs if o[1] == 0x30][0]
     outer = [o for o in r.hub_t.outputs if o[1] == 0x31][0]
@@ -107,7 +108,9 @@ def test_strimer_per_port_mixes_hardware_and_software():
     r.ctrl.apply_config(cfg)
     by_port = {o[1] & 0x0F: o for o in r.str_t.outputs}
     assert by_port[0][2:5] == bytes([0, 0, 255])  # green -> R,B,G = 0,0,255
-    assert by_port[1][2:5] == bytes([255, 0, 0]) and by_port[1][2 + 26 * 3 : 2 + 27 * 3] == bytes([0, 255, 0])  # red .. blue along the strip
+    assert by_port[1][2:5] == bytes([255, 0, 0]) and by_port[1][2 + 26 * 3 : 2 + 27 * 3] == bytes(
+        [0, 255, 0]
+    )  # red .. blue along the strip
     assert len(by_port) == 10
 
 
@@ -141,7 +144,8 @@ def test_lab_shows_raw_effect_and_is_not_overwritten_until_done():
     r = Rig(temps={"cpu": 40.0})
     r.ctrl.apply_config(apply_theme(r.ctrl.cfg, "Thermal"))
     r.ctrl.tick()
-    r.hub_t.features.clear(); r.hub_t.outputs.clear()
+    r.hub_t.features.clear()
+    r.hub_t.outputs.clear()
     r.ctrl.lab_show({"group": 2, "ring": "outer", "mode": 77, "speed": 4})
     assert Z([0xE0, 0x15, 77, 0xFE, 0, 0]) in r.hub_t.features
     assert r.ctrl.state()["hub"]["lab"] == [2]
