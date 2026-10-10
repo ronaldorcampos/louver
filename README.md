@@ -101,15 +101,6 @@ exits with a message naming the running copy, so two processes never fight over 
 
 To keep fan control running when nobody is logged in: `loginctl enable-linger $USER`.
 
-### Upgrading from UniHub
-
-Louver used to be called UniHub. Running `./install.sh` swaps the old service,
-launcher, menu entry and tray app for the new ones, and starts Louver if UniHub
-was enabled. On first run Louver copies `~/.config/unihub/config.json` to
-`~/.config/louver/`, and replaces the old start-on-login entry. The old config
-is left in place as a backup and can be deleted once you're happy. The udev rule
-keeps working under its old name; install.sh prints the commands to rename it.
-
 ### If you used uni-sync before
 
 `uni-sync.service` runs once at boot and puts the hub ports into motherboard
