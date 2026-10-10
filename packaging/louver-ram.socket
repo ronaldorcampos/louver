@@ -1,0 +1,16 @@
+# The louver-ram helper's socket: only root and the plugdev group (which
+# already gates the motherboard fan headers) can reach it. A connection
+# starts louver-ram.service, which alone touches the SMBus.
+[Unit]
+Description=Louver RAM RGB helper socket
+Documentation=file:///usr/share/doc/louver/README.md
+
+[Socket]
+ListenStream=/run/louver-ram.sock
+SocketUser=root
+SocketGroup=plugdev
+SocketMode=0660
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

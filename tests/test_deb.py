@@ -48,6 +48,11 @@ def test_contents(deb):
         "/usr/lib/python3/dist-packages/louver/web/index.html",
         "/usr/lib/python3/dist-packages/louver/web/fonts/unbounded.woff2",
         "/usr/lib/systemd/user/louver.service",
+        "/usr/lib/systemd/system/louver-ram.socket",
+        "/usr/lib/systemd/system/louver-ram.service",
+        "/usr/lib/python3/dist-packages/louver/corsair_dram.py",
+        "/usr/lib/python3/dist-packages/louver/ramhelper.py",
+        "/usr/lib/python3/dist-packages/louver/ramrgb.py",
         "/usr/lib/udev/rules.d/70-louver.rules",
         f"/usr/share/applications/{APP_ID}.desktop",
         f"/usr/share/icons/hicolor/scalable/apps/{APP_ID}.svg",
@@ -79,8 +84,44 @@ def test_installed_files_point_at_the_system_copy(deb, tmp_path):
     assert "Martin Hartl" in aura and "Adam Honse" in aura and "License: GPL-2+" in aura
     assert re.search(r"Comment: A port of OpenRGB's .*\n .*\n [0-9a-f]{40}; see NOTICE\.", aura)
     assert "MIT" not in copyright.split("Files: louver/devices.py", 1)[0]  # Files: * is no longer MIT
+    # So is the Corsair DRAM driver.
+    dram = copyright.split("Files: louver/corsair_dram.py\n", 1)[1].split("\n\n", 1)[0]
+    assert "Adam Honse" in dram and "Erik Gilling" in dram and "License: GPL-2+" in dram
+    assert "2026 Ronaldo Campos" in dram
+    from louver.corsair_dram import OPENRGB_COMMIT
+
+    assert re.search(
+        r"Comment: A port of OpenRGB's Corsair DRAM driver\n .*\n " + OPENRGB_COMMIT + r"; see NOTICE\.", dram
+    )
     rules = (root / "usr/lib/udev/rules.d/70-louver.rules").read_text()
     assert 'ATTRS{idVendor}=="0b05", ATTRS{idProduct}=="19af"' in rules
+    sock = (root / "usr/lib/systemd/system/louver-ram.socket").read_text().splitlines()
+    for line in ("ListenStream=/run/louver-ram.sock", "SocketUser=root", "SocketGroup=plugdev", "SocketMode=0660"):
+        assert line in sock, line
+    svc = (root / "usr/lib/systemd/system/louver-ram.service").read_text().splitlines()
+    for line in (
+        "ExecStart=/usr/bin/python3 -I -m louver.ramhelper",
+        "Requires=louver-ram.socket",
+        "DevicePolicy=closed",
+        "DeviceAllow=char-i2c rw",
+        "CapabilityBoundingSet=",
+        "AmbientCapabilities=",
+        "NoNewPrivileges=yes",
+        "ProtectSystem=strict",
+        "ProtectHome=yes",
+        "PrivateNetwork=yes",
+        "RestrictAddressFamilies=AF_UNIX",
+        "SystemCallFilter=@system-service",
+        "SystemCallFilter=~@privileged @resources",
+        "ReadOnlyPaths=/dev",  # device nodes still open read-write on a read-only mount
+    ):
+        assert line in svc, line
+    assert not [
+        x for x in svc if x.startswith(("PrivateDevices", "PrivateUsers", "User="))
+    ]  # both would hide /dev/i2c-*
+    assert "[Install]" not in svc  # only the socket starts it
+    # No udev rule ever hands /dev/i2c-* to users: the helper is the only way to the SMBus.
+    assert "i2c" not in (root / "usr/lib/udev/rules.d/70-louver.rules").read_text()
     wrapper = root / "usr/bin/louver"
     assert wrapper.stat().st_mode & 0o777 == 0o755
     assert "/usr/bin/python3 -I -m louver" in wrapper.read_text()
@@ -96,25 +137,64 @@ STUBS = {
     "py3compile": 'echo "py3compile $*" >> "$LOG"',
     "py3clean": 'echo "py3clean $*" >> "$LOG"',
 }
+# Never the real ones: the scripts' system-unit calls land here. Like the
+# real deb-systemd-helper, the stub refuses to run outside dpkg, and its
+# was-enabled answers as WAS_ENABLED says.
+SYSTEMD_STUBS = {
+    "systemctl": 'echo "systemctl $*" >> "$LOG"',
+    "deb-systemd-helper": """[ -n "$DPKG_MAINTSCRIPT_PACKAGE" ] || exit 1
+echo "deb-systemd-helper $*" >> "$LOG"
+case "$*" in *was-enabled*) [ "$WAS_ENABLED" = yes ] ;; esac""",
+    "deb-systemd-invoke": 'echo "deb-systemd-invoke $*" >> "$LOG"',
+}
+BASICS = ("cat",)  # all a stub needs from the system: PATH reaches nothing else
+
+
+def _stub_dir(path, stubs):
+    path.mkdir()
+    for name, body in stubs.items():
+        (path / name).write_text(f"#!/bin/sh\n{body}\n")
+        (path / name).chmod(0o755)
+    return path
 
 
 @pytest.fixture
 def scripts(deb, tmp_path):
-    """Runs a maintainer script against stub system commands; returns what they were asked to do."""
+    """Runs a maintainer script against stub system commands; returns what
+    they were asked to do. ``systemd`` picks the systemd-running branch (the
+    script's /run/systemd/system check is pointed at a directory that exists
+    or not), whatever this host runs; ``dpkg_root`` sets DPKG_ROOT, as for an
+    install into another root; ``tools=False`` takes systemctl and the
+    deb-systemd-* helpers away."""
     control = tmp_path / "DEBIAN"
     subprocess.run(["dpkg-deb", "-e", str(deb), str(control)], check=True)
-    stubs = tmp_path / "bin"
-    stubs.mkdir()
-    for name, body in STUBS.items():
-        (stubs / name).write_text(f"#!/bin/sh\n{body}\n")
-        (stubs / name).chmod(0o755)
+    stubs = _stub_dir(tmp_path / "bin", STUBS)
+    systemd_stubs = _stub_dir(tmp_path / "systemd-bin", SYSTEMD_STUBS)
+    basics = tmp_path / "basics"
+    basics.mkdir()
+    for name in BASICS:
+        (basics / name).symlink_to(shutil.which(name))
     log = tmp_path / "log"
+    running = tmp_path / "run-systemd-system"
+    running.mkdir()
 
-    def run(script, *args):
-        assert (control / script).stat().st_mode & 0o777 == 0o755
+    def run(script, *args, systemd=True, tools=True, was_enabled=True, dpkg_root=None):
+        path = control / script
+        assert path.stat().st_mode & 0o777 == 0o755
+        text = path.read_text()
+        assert text.count("/run/systemd/system") >= 1  # or the swap below would test nothing
+        copy = tmp_path / f"{script}.run"
+        copy.write_text(text.replace("/run/systemd/system", str(running if systemd else tmp_path / "absent")))
         log.write_text("")
-        env = {"PATH": f"{stubs}:/usr/bin:/bin", "LOG": str(log)}
-        r = subprocess.run(["sh", str(control / script), *args], env=env, capture_output=True, text=True)
+        env = {
+            "PATH": ":".join(str(d) for d in ([stubs, systemd_stubs] if tools else [stubs]) + [basics]),
+            "LOG": str(log),
+            "DPKG_MAINTSCRIPT_PACKAGE": "louver",  # dpkg sets it
+            "WAS_ENABLED": "yes" if was_enabled else "no",
+        }
+        if dpkg_root is not None:
+            env["DPKG_ROOT"] = dpkg_root
+        r = subprocess.run(["/bin/sh", str(copy), *args], env=env, capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
         return r.stdout, log.read_text().splitlines()
 
@@ -128,6 +208,20 @@ def _systemctl(*args):
     ]
 
 
+# Where the scripts may (True) or must not (False) talk to the running
+# systemd: it runs, it doesn't, or it runs but dpkg installs into another root.
+HOSTS = [
+    pytest.param({"systemd": True}, True, id="systemd"),
+    pytest.param({"systemd": False}, False, id="no-systemd"),
+    pytest.param({"systemd": True, "dpkg_root": "/srv/target"}, False, id="dpkg-root"),
+    pytest.param({"systemd": True, "dpkg_root": ""}, True, id="empty-dpkg-root"),
+]
+
+
+def _system(calls):
+    return [c for c in calls if c.startswith(("systemctl", "deb-systemd"))]
+
+
 @pytest.mark.parametrize("old_version", ["", "0.1.0"])  # first install / upgrade or reinstall
 def test_postinst_configure(scripts, old_version):
     out, calls = scripts("postinst", "configure", old_version)
@@ -135,6 +229,14 @@ def test_postinst_configure(scripts, old_version):
     assert [c for c in calls if c.startswith("runuser")] == [
         *_systemctl("daemon-reload"),  # a changed unit file applies too
         *_systemctl("try-restart", "louver.service"),
+    ]
+    assert _system(calls) == [
+        "deb-systemd-helper unmask louver-ram.socket",
+        "deb-systemd-helper --quiet was-enabled louver-ram.socket",
+        "deb-systemd-helper enable louver-ram.socket",  # the socket only: the helper starts on a connection
+        "systemctl --system daemon-reload",
+        "deb-systemd-invoke start louver-ram.socket",
+        *(["deb-systemd-invoke try-restart louver-ram.service"] if old_version else []),
     ]
     assert "systemctl --user enable --now louver" in out  # never enabled for every account
     udev = [c for c in calls if c.startswith("udevadm")]
@@ -145,9 +247,57 @@ def test_postinst_configure(scripts, old_version):
         assert udev == []
 
 
-def test_prerm_remove_stops_running_daemons(scripts):
-    _, calls = scripts("prerm", "remove")
-    assert calls == [*_systemctl("stop", "louver.service"), "py3clean -p louver"]
+def test_postinst_keeps_an_admins_disable(scripts):
+    _, calls = scripts("postinst", "configure", "0.1.0", was_enabled=False)
+    assert _system(calls) == [
+        "deb-systemd-helper unmask louver-ram.socket",
+        "deb-systemd-helper --quiet was-enabled louver-ram.socket",
+        "deb-systemd-helper update-state louver-ram.socket",  # not enabled again
+        "systemctl --system daemon-reload",
+        "deb-systemd-invoke start louver-ram.socket",  # a no-op for a disabled unit
+        "deb-systemd-invoke try-restart louver-ram.service",
+    ]
+
+
+@pytest.mark.parametrize("host, live", HOSTS)
+def test_postinst_starts_the_socket_only_on_a_live_system(scripts, host, live):
+    # A chroot, an image build, a container without systemd, an install into
+    # another root: the enable link is made for the next boot, nothing is started.
+    _, calls = scripts("postinst", "configure", "", **host)
+    live_calls = ["systemctl --system daemon-reload", "deb-systemd-invoke start louver-ram.socket"]
+    assert _system(calls) == [
+        "deb-systemd-helper unmask louver-ram.socket",
+        "deb-systemd-helper --quiet was-enabled louver-ram.socket",
+        "deb-systemd-helper enable louver-ram.socket",
+        *(live_calls if live else []),
+    ]
+
+
+@pytest.mark.parametrize("action", ["abort-upgrade", "abort-deconfigure", "abort-remove"])
+def test_postinst_abort_puts_the_socket_back(scripts, action):
+    _, calls = scripts("postinst", action, "0.1.0")
+    assert "py3compile -p louver" not in calls and not [c for c in calls if c.startswith("runuser")]
+    assert _system(calls)[:3] == [
+        "deb-systemd-helper unmask louver-ram.socket",
+        "deb-systemd-helper --quiet was-enabled louver-ram.socket",
+        "deb-systemd-helper enable louver-ram.socket",
+    ]
+    assert "deb-systemd-invoke start louver-ram.socket" in calls
+
+
+@pytest.mark.parametrize(
+    "script, args", [("postinst", ("configure", "")), ("prerm", ("remove",)), ("postrm", ("purge",))]
+)
+def test_scripts_go_on_without_the_systemd_tools(scripts, script, args):
+    _, calls = scripts(script, *args, tools=False)
+    assert _system(calls) == []
+
+
+@pytest.mark.parametrize("host, live", HOSTS)
+def test_prerm_remove_stops_running_daemons(scripts, host, live):
+    _, calls = scripts("prerm", "remove", **host)
+    ram = ["deb-systemd-invoke stop louver-ram.socket louver-ram.service"] if live else []
+    assert calls == [*_systemctl("stop", "louver.service"), *ram, "py3clean -p louver"]  # the link stays: postrm
 
 
 def test_prerm_upgrade_leaves_daemons_running(scripts):
@@ -155,8 +305,21 @@ def test_prerm_upgrade_leaves_daemons_running(scripts):
     assert calls == ["py3clean -p louver"]  # postinst try-restarts them on the new code
 
 
-def test_postrm_parses(scripts):
-    scripts("postrm", "purge")
+@pytest.mark.parametrize("host, live", HOSTS)
+@pytest.mark.parametrize(
+    "action, helper",
+    [
+        ("remove", ["deb-systemd-helper mask louver-ram.socket"]),  # inert until a reinstall unmasks it
+        ("purge", ["deb-systemd-helper purge louver-ram.socket", "deb-systemd-helper unmask louver-ram.socket"]),
+    ],
+)
+def test_postrm_forgets_the_ram_units(scripts, action, helper, host, live):
+    _, calls = scripts("postrm", action, **host)
+    assert _system(calls) == [*(["systemctl --system daemon-reload"] if live else []), *helper]
+
+
+def test_postrm_upgrade_does_nothing(scripts):
+    assert scripts("postrm", "upgrade", "0.2.0")[1] == []
 
 
 def test_ui_relaunch_keeps_isolated_mode(monkeypatch):

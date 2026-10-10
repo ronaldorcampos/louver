@@ -57,6 +57,50 @@ library and talks to the controllers directly through `/dev/hidraw*`.
   stops, the lights stay as they are.
 - `louver aura-probe` shows the controller's firmware and channels (read-only).
 
+**RAM RGB** (Corsair DDR5 sticks on an Intel SMBus, opt-in, Debian package only)
+- Corsair Vengeance RGB, Vengeance RGB RS, Vengeance Shugo, Dominator Platinum
+  and Dominator Titanium DDR5 sticks, as a **RAM RGB** zone: Off, one colour,
+  or a gradient along each stick's LEDs. The same look on every stick; themes
+  set it too.
+- Intel boards only: the sticks are reached over the chipset's SMBus
+  (`i2c-i801`), found by its name, never by bus number. DDR4 sticks and AMD
+  boards aren't supported: the helper scans only when the firmware's memory
+  table (SMBIOS type 17, `/sys/firmware/dmi/entries`) lists DDR5 and nothing
+  else in every occupied slot.
+- Louver sends colours only (OpenRGB's "direct" mode). It never writes an
+  effect or anything else the stick stores, so after a restart the sticks
+  show their own effect until Louver sets them again. When Louver stops, or
+  RAM RGB is turned off, they keep their last colours (or fall back to their
+  own effect, depending on the stick).
+- Off until you turn on **Settings → Control RAM RGB**; until then the Louver
+  daemon never contacts the helper below. The setting is Louver's, not the
+  helper's: `louver ram-probe`, or any other process in the `plugdev` group
+  that connects to the helper's socket, starts it, and it scans the bus
+  whatever the setting says.
+- How: Louver runs as your user and gets no access to `/dev/i2c-*`. The
+  package adds a small root helper, `louver-ram.service`, started on demand by
+  `louver-ram.socket` (`/run/louver-ram.sock`, reachable by root and the
+  `plugdev` group). The helper alone opens the SMBus, in a tight systemd
+  sandbox (no capabilities, no network, `/dev/i2c-*` and nothing else). It
+  refuses every register, address and length the driver doesn't use, and
+  sends colours only to a stick that identified itself as a Corsair DDR5
+  controller it knows (its LED count comes from that table: an unknown stick
+  is listed, not driven), at most one frame a second per stick after a burst
+  of four. A scan does write before that, as OpenRGB's does: two `0x00` bytes
+  (registers `0x61` and `0x21`, selecting the device-info buffer) go to every
+  address whose registers `0x43` and `0x44` read like a Corsair controller,
+  before its device info has been read and checked. The helper drops a client
+  that sends nothing for a minute (a connected Louver re-sends its frame
+  every 10 s, on the first poll after that), and exits a minute after the
+  last client disconnects.
+  Unlike OpenRGB, there's no udev rule that opens the SMBus to users.
+- `louver ram-probe` asks the helper what it found: the bus, each stick
+  (address, model, LED count, firmware), and why any other address was skipped.
+- The per-user `./install.sh` doesn't install the helper, so RAM RGB needs the
+  Debian package. If `/dev/i2c-N` is missing, load the module:
+  `sudo modprobe i2c-dev`, and to load it at every boot,
+  `echo i2c-dev | sudo tee /etc/modules-load.d/i2c-dev.conf`.
+
 ## Install
 
 ### Ubuntu / Debian package
@@ -127,6 +171,7 @@ sudo systemctl disable uni-sync.service
 ```
 louver probe            read-only hardware check: firmware and RPM (no daemon needed)
 louver aura-probe       ASUS Aura motherboard RGB: firmware and channels (read-only)
+louver ram-probe        Corsair DDR5 RAM RGB: what the louver-ram helper found on the SMBus
 louver status           live state from the running daemon
 louver set 2 60         port 2 to a fixed 60%
 louver daemon --demo    simulated hub, Strimer and motherboard, for trying the UI without hardware
@@ -157,6 +202,17 @@ and its direct per-LED mode.
 The config table says how many LEDs are on the board and how many ARGB
 headers it has, but not how many LEDs are on each header, so Louver drives the
 headers with hardware effects only.
+
+Corsair DDR5 RGB controllers sit at SMBus addresses `0x18`-`0x1F`. A
+controller answers `0x1A`-`0x1C` at register `0x43` and `0x01`/`0x03`/`0x04`
+at `0x44`; its 32-byte device-info buffer (vendor `0x1B1C`, product ID,
+firmware, protocol) is selected with `0x61` and `0x21` and read from `0x40`,
+with a CRC-8 at `0x42`. A direct frame (protocol 4 and later) is the LED
+count, R, G, B per LED and a CRC-8, block-written to `0x31` (and `0x32` past
+32 bytes). `louver/corsair_dram.py` is a port to Python of the Corsair DRAM
+driver in OpenRGB (GPL-2.0-or-later), by Adam Honse and Erik Gilling; NOTICE
+names the files and the commit. It leaves out the hardware effects and the
+other colour path, which store their settings on the stick (register `0x82`).
 
 Credits and licences are in [NOTICE](NOTICE).
 

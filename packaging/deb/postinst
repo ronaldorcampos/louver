@@ -34,4 +34,35 @@ if [ "$1" = configure ]; then
     echo "  systemctl --user enable --now louver"
 fi
 
+# The RAM RGB helper's socket, the way dh_installsystemd does it: enabled on
+# first install, and an admin's `systemctl disable` (or mask) of it kept
+# across upgrades. It costs nothing while nobody connects: the helper only
+# starts (and only touches the SMBus) once a client connects.
+case "$1" in configure | abort-upgrade | abort-deconfigure | abort-remove)
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+        deb-systemd-helper unmask louver-ram.socket >/dev/null || true  # the mask postrm remove left
+        if deb-systemd-helper --quiet was-enabled louver-ram.socket; then
+            deb-systemd-helper enable louver-ram.socket >/dev/null || true
+        else
+            deb-systemd-helper update-state louver-ram.socket >/dev/null || true
+        fi
+    fi
+    # Start it only with this system's systemd running (not for an install
+    # into another root with DPKG_ROOT, in a chroot, an image build or a
+    # container without systemd). deb-systemd-invoke starts only enabled units
+    # and asks policy-rc.d first.
+    if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl --system daemon-reload >/dev/null || true
+        fi
+        if command -v deb-systemd-invoke >/dev/null 2>&1; then
+            deb-systemd-invoke start louver-ram.socket >/dev/null || true
+            if [ -n "$2" ]; then  # an upgrade: a running helper moves to the new code
+                deb-systemd-invoke try-restart louver-ram.service >/dev/null || true
+            fi
+        fi
+    fi
+    ;;
+esac
+
 exit 0

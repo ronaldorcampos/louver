@@ -7,6 +7,7 @@ louver status            show RPM / duty / temps from the running daemon
 louver set PORT PERCENT  put a port in manual mode at PERCENT (via daemon)
 louver probe             read-only hardware check, no daemon needed
 louver aura-probe        ASUS Aura motherboard RGB: firmware and channels (read-only)
+louver ram-probe         Corsair DDR5 RAM RGB: the sticks the louver-ram helper found
 louver mb-list           motherboard fan headers: RPM, PWM, mode (read-only)
 louver mb-test N PCT     run motherboard header N at PCT for a few seconds, then hand it back to BIOS
 """
@@ -25,7 +26,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import aura, instance
+from . import aura, instance, ramrgb
 from . import config as cfgmod
 from .devices import DRIVERS, VENDOR_ID, StrimerPlus, UniHubALV2
 from .hidraw import HidrawTransport, enumerate_hidraw
@@ -65,13 +66,23 @@ def cmd_daemon(args, cfg: dict, path: Path) -> int:
         if lock is None:
             return ALREADY_RUNNING
     if args.demo:
-        from .sim import SimAuraAccess, open_sim, sim_motherboard
+        from .sim import SimAuraAccess, SimRamAccess, open_sim, sim_motherboard
 
-        # Demo never touches real hardware or the real config file, so it
-        # can show the simulated motherboard RGB without asking.
-        cfg = {**cfg, "motherboard_rgb": {**cfg["motherboard_rgb"], "enabled": True}}
+        # Demo never touches real hardware, the RAM helper or the real config
+        # file, so it can show the simulated motherboard and RAM RGB without asking.
+        cfg = {
+            **cfg,
+            "motherboard_rgb": {**cfg["motherboard_rgb"], "enabled": True},
+            "ram_rgb": {**cfg["ram_rgb"], "enabled": True},
+        }
         ctrl = Controller(
-            cfg, None, SensorHub(), opener=open_sim, mbfans=sim_motherboard(), aura_access=SimAuraAccess()
+            cfg,
+            None,
+            SensorHub(),
+            opener=open_sim,
+            mbfans=sim_motherboard(),
+            aura_access=SimAuraAccess(),
+            ram_access=SimRamAccess(),
         )
     else:
         from .mbfans import MotherboardFans
@@ -270,6 +281,38 @@ def cmd_aura_probe(args, cfg: dict, path: Path) -> int:
     return rc
 
 
+def cmd_ram_probe(args, cfg: dict, path: Path, access=None) -> int:
+    """What the louver-ram helper found on the SMBus. Only asks the helper
+    (which scans on its first request); never touches the bus itself, so it
+    needs no hardware lock: the helper serialises its bus access."""
+    access = access if access is not None else ramrgb.RamHelperAccess(timeout=ramrgb.PROBE_TIMEOUT)
+    try:
+        client = access.connect()
+    except OSError as e:
+        print(f"louver ram-probe: {ramrgb.connect_error(access.path, e)}", file=sys.stderr)
+        return 1
+    try:
+        listing = client.list(timeout=ramrgb.PROBE_TIMEOUT)  # the first one includes the scan
+    except (OSError, ValueError, ramrgb.RamHelperError) as e:
+        print(f"louver ram-probe: the RAM helper didn't answer: {e}", file=sys.stderr)
+        return 1
+    finally:
+        client.close()
+    if listing.bus:
+        print(f"{listing.bus}  {listing.device}")
+    for st in listing.sticks:
+        print(
+            f"  {st.addr:#04x}  {st.name}  pid {st.pid:#06x}  {st.leds} LEDs"
+            f"  firmware {st.firmware}  protocol {st.protocol}"
+        )
+    for addr, reason in listing.skipped:
+        print(f"  {addr:#04x}  skipped: {reason}")
+    if not listing.sticks:
+        print(f"no Corsair DDR5 RGB stick to drive: {listing.error or 'none found'}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_mb_list(args, cfg: dict, path: Path) -> int:
     from .mbfans import MotherboardFans
 
@@ -336,6 +379,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("percent", type=int, choices=range(0, 101), metavar="PERCENT")
     sub.add_parser("probe")
     sub.add_parser("aura-probe")
+    sub.add_parser("ram-probe")
     sub.add_parser("mb-list")
     t = sub.add_parser("mb-test")
     t.add_argument("header", type=int)
@@ -358,6 +402,7 @@ def main(argv: list[str] | None = None) -> int:
         "set": cmd_set,
         "probe": cmd_probe,
         "aura-probe": cmd_aura_probe,
+        "ram-probe": cmd_ram_probe,
         "app": cmd_app,
         "mb-list": cmd_mb_list,
         "mb-test": cmd_mb_test,

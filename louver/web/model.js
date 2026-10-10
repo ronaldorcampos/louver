@@ -163,6 +163,27 @@ const auraUsable = (channels) => (channels || []).filter((ch) => !ch.note);
 const auraSkipped = (channels) => (channels || []).filter((ch) => ch.note).map((ch) => `${ch.name} (${ch.note})`).join(", ");
 const auraShown = (state) => !!(state && state.motherboard_rgb && state.motherboard_rgb.enabled && state.motherboard_rgb.connected);
 
+// RAM RGB (Corsair DDR5 sticks, through the louver-ram helper): Louver draws
+// one static frame per stick, LED 0 first, like ramrgb.render.
+function ramFrame(L, leds) {
+  const n = Math.max(1, leds | 0);
+  if (!L || L.mode === "Off") return Array(n).fill(OFF);
+  const c = colorsOf(L);
+  if (L.mode !== "Gradient" || c.length === 1) return Array(n).fill(c[0]);
+  const stops = c.map(toRgb);
+  return Array.from({ length: n }, (_, i) => toHex(gradientAt(stops, i / Math.max(1, n - 1))));
+}
+// The sidebar's one bar: the look along a stick (every stick gets the same).
+// sticks: state.ram_rgb.sticks.
+function ramBar(cfg, sticks) {
+  const L = cfg.ram_rgb.lighting;
+  if (!sticks || !sticks.length || L.mode === "Off") return [OFF];
+  if (L.mode !== "Gradient") return colorsOf(L).slice(0, 1);
+  return ramFrame(L, sticks[0].leds);
+}
+const ramDetail = (st) => `${st.leds} LED${st.leds === 1 ? "" : "s"} · firmware ${st.firmware} · address 0x${st.addr.toString(16)}`;
+const ramShown = (state) => !!(state && state.ram_rgb && state.ram_rgb.enabled && state.ram_rgb.connected);
+
 // The motherboard's own ARGB effect: we can't see it, so show a neutral pattern.
 const MB_LIGHT = "repeating-conic-gradient(var(--muted) 0 22.5deg, var(--panel-2) 0 45deg)";
 const ringCss = (cols) => (cols == null ? MB_LIGHT : cols.length === 1 ? cols[0] : `conic-gradient(${[...cols, cols[0]].join(", ")})`);
@@ -172,7 +193,8 @@ const barCss = (cols) => (cols == null ? MB_LIGHT : cols.length === 1 ? cols[0] 
 const visiblePorts = (cfg) => cfg.hub.groups.map((g, i) => [g, i]).filter(([g]) => g.fans > 0 || cfg.ui.show_empty_ports);
 const mbCfg = (cfg, index) => cfg.motherboard.headers.find((x) => x.index === index);
 const sameZone = (a, b) => !!a && !!b && a.kind === b.kind && a.i === b.i;
-const zoneKey = (z) => (z.kind === "strimer" || z.kind === "aura" ? z.kind : `${z.kind}-${z.i}`);
+const SINGLE_ZONES = new Set(["strimer", "aura", "ram"]);  // one zone each: named without a number
+const zoneKey = (z) => (SINGLE_ZONES.has(z.kind) ? z.kind : `${z.kind}-${z.i}`);
 
 // Motherboard headers show up once something spins on them or you've set them
 // up. zeroRuns[index] counts polls in a row at 0 rpm (missing = never seen
@@ -192,6 +214,8 @@ function zones(cfg, state, { zeroRuns = {}, keep = null } = {}) {
   if (state && state.strimer && state.strimer.connected) z.push({ kind: "strimer", i: 0 });
   // Motherboard RGB: only once it's turned on in Settings and the board answers.
   if (auraShown(state)) z.push({ kind: "aura", i: 0 });
+  // RAM RGB: likewise, once it's on and the helper found sticks.
+  if (ramShown(state)) z.push({ kind: "ram", i: 0 });
   return z;
 }
 
@@ -210,13 +234,13 @@ function validSelection(sel, zs) {
   return zs.length ? { ...zs[0] } : null;
 }
 
-// #hub-2, #mb-7, #strimer, #aura, #settings: reloads keep your place, and the tray
+// #hub-2, #mb-7, #strimer, #aura, #ram, #settings: reloads keep your place, and the tray
 // can open the window on a zone.
 function parseHash(hash) {
   const h = String(hash || "").replace(/^#/, "");
   let m;
   if (h === "settings") return { view: "settings" };
-  if (h === "strimer" || h === "aura") return { view: "zone", sel: { kind: h, i: 0 } };
+  if (SINGLE_ZONES.has(h)) return { view: "zone", sel: { kind: h, i: 0 } };
   if ((m = /^hub-([0-3])$/.exec(h))) return { view: "zone", sel: { kind: "hub", i: +m[1] } };
   if ((m = /^mb-([1-9]|1[0-6])$/.exec(h))) return { view: "zone", sel: { kind: "mb", i: +m[1] } };
   return null;
@@ -235,6 +259,7 @@ const SOFT_TAGS = { Custom: "paint each LED", Gradient: "2–6 colour stops", Te
 // What an effect does with colours, shown under its name on the effect card.
 function effectTag(kind, m) {
   if (m.software) return SOFT_TAGS[m.name] || "software";
+  if (kind === "ram" && m.name === "Gradient") return "colour stops along each stick";
   const ring = kind === "hub" && m.inner === false ? "outer ring only · " : kind === "hub" && m.outer === false ? "inner ring only · " : "";
   const c = m.name === "Off" ? "LEDs off" : !m.max_colors ? "built-in colours"
     : isCorner(kind, m.name) ? "a colour per side"
@@ -254,6 +279,7 @@ return {
   OFF, UNSET, NO_READING, RAINBOW, MB_LIGHT, MB_ZERO_GRACE, clamp, normColor, gradientAt, thermalColor,
   hubFanPreview, strimerPreview, strimerPortPreview, ringCss, barCss,
   auraLook, auraPreview, auraBar, auraDetail, auraUsable, auraSkipped, auraShown,
+  ramFrame, ramBar, ramDetail, ramShown,
   visiblePorts, mbCfg, sameZone, zoneKey, zones, nextZeroRuns, validSelection, parseHash, hashFor,
   isCorner, effectTag, speedFoot,
 };
