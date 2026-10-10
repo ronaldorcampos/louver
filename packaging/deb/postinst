@@ -1,0 +1,37 @@
+#!/bin/sh
+set -e
+
+# systemctl --user "$@" for each logged-in user, best effort.
+# The service is per user and never enabled globally: a global enable also
+# starts it in the login screen's user session, which takes the port first.
+each_user() {
+    command -v loginctl >/dev/null 2>&1 || return 0
+    loginctl list-users --no-legend 2>/dev/null | while read -r uid user _; do
+        runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" \
+            systemctl --user "$@" </dev/null >/dev/null 2>&1 || true  # keep the loop's stdin
+    done
+}
+
+if [ "$1" = configure ]; then
+    if command -v py3compile >/dev/null 2>&1; then
+        py3compile -p louver
+    fi
+    # Apply the udev rule now, not at the next boot: the logged-in user can
+    # open the hub, and plugdev can drive the motherboard headers. Only with
+    # this system's own udevd running (not in a chroot or image build).
+    if [ -S /run/udev/control ] && command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules || true
+        udevadm trigger --action=change --subsystem-match=hidraw || true
+        for chip in 'nct67*' 'it87*' 'it86*'; do  # the rule's hwmon part runs on add
+            udevadm trigger --action=add --subsystem-match=hwmon --attr-match="name=$chip" || true
+        done
+    fi
+    # An upgrade: running daemons move to the new code (and its web UI
+    # files), under the new unit file if that changed too.
+    each_user daemon-reload
+    each_user try-restart louver.service
+    echo "Louver: to start fan control now and at every login, run (as your user):"
+    echo "  systemctl --user enable --now louver"
+fi
+
+exit 0

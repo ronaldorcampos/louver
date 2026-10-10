@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [master]
+    tags: ["v*"]
   pull_request:
 
 permissions:
@@ -41,3 +42,41 @@ jobs:
       # every module compiles.
       - run: python -m compileall -q louver
       - run: python -m pytest -rs
+
+  deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: packaging/build-deb.sh dist
+      - run: packaging/deb-smoke.sh dist/louver_*_all.deb
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+  # Push a tag like v0.2.0 (matching pyproject's version) to publish the .deb.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [lint, test, deb]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: deb
+          path: dist
+      - name: The tag matches pyproject's version, and there is one .deb
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
+          test "$GITHUB_REF_NAME" = "v$version"
+          test "$(ls dist | wc -l)" = 1
+      - name: Publish (a1/b1/rc1 tags as pre-releases)
+        run: |
+          pre=; if printf '%s\n' "$GITHUB_REF_NAME" | grep -Eq '(a|b|rc)[0-9]+$'; then pre=--prerelease; fi
+          gh release create "$GITHUB_REF_NAME" dist/*.deb --repo "$GITHUB_REPOSITORY" \
+            --title "Louver ${GITHUB_REF_NAME#v}" --generate-notes $pre
+        env:
+          GH_TOKEN: ${{ github.token }}

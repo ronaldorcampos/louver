@@ -115,8 +115,11 @@ def cmd_ui(args, cfg: dict, path: Path) -> int:
     try:
         import gi  # noqa: F401  (desktop app available?)
 
+        # Keep -I (the packaged /usr/bin/louver): without it, run from a
+        # checkout, -m would start the checkout's copy instead.
+        isolated = ["-I"] if sys.flags.isolated else []
         subprocess.Popen(
-            [sys.executable, "-m", "louver", "app"],
+            [sys.executable, *isolated, "-m", "louver", "app"],
             start_new_session=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

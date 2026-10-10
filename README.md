@@ -1,9 +1,16 @@
 # Louver
 
-An L-Connect 3–style fan and RGB app for Linux, for the Lian Li **UNI HUB AL V2**
-(`0cf2:a104`) and the **Strimer Plus** (`0cf2:a200`). It runs as a small
+A fan and RGB app for Linux, for the Lian Li **UNI HUB AL V2**
+(`0cf2:a104`) and the **Strimer Plus** (`0cf2:a200`): an open-source
+alternative to L-Connect 3, which only runs on Windows. It runs as a small
 daemon with a local web UI. It needs nothing beyond the Python standard
 library and talks to the controllers directly through `/dev/hidraw*`.
+
+> [!WARNING]
+> Louver sets your fan speeds directly. A curve that's too low, a fixed low
+> speed, or a pump header taken off BIOS control can let your CPU, GPU or pump
+> overheat. Watch your temperatures after any change. Louver comes with no
+> warranty (see [LICENSE](LICENSE)); use it at your own risk.
 
 ## Features
 
@@ -40,6 +47,36 @@ library and talks to the controllers directly through `/dev/hidraw*`.
 - Lighting per port or for all ports at once; per-port Strimer control; motherboard ARGB sync toggles.
 
 ## Install
+
+### Ubuntu / Debian package
+
+If you used `./install.sh` before, remove that per-user copy first, or it keeps
+running instead of the package's:
+
+```bash
+systemctl --user disable --now louver
+rm -rf ~/.local/share/louver ~/.local/bin/louver ~/.config/systemd/user/louver.service
+rm -f ~/.local/share/applications/io.github.ronaldorcampos.Louver.desktop ~/.local/share/icons/hicolor/*/apps/io.github.ronaldorcampos.Louver*.svg
+sudo rm -f /etc/udev/rules.d/99-louver.rules   # the package brings its own
+systemctl --user daemon-reload
+```
+
+Then download `louver_<version>_all.deb` from the
+[Releases](https://github.com/ronaldorcampos/louver/releases) page (or build it with
+`packaging/build-deb.sh`, which writes it to `dist/`), and install it:
+
+```bash
+sudo apt install ./louver_*_all.deb
+systemctl --user enable --now louver
+```
+
+The package brings the desktop app's dependencies and the udev rule. Upgrading
+restarts the service on the new version for logged-in users. `sudo apt remove louver`
+stops it for them and removes the code; your config in `~/.config/louver` stays. If
+you won't reinstall, run `systemctl --user disable louver` before removing it, which
+can't remove the start-at-login link once the package is gone.
+
+### Per-user install (any distro)
 
 ```bash
 ./install.sh
@@ -104,11 +141,23 @@ via `HIDIOCGINPUT`. The byte layouts follow the community reverse-engineering
 in [sgtaziz/lian-li-linux](https://github.com/sgtaziz/lian-li-linux) (MIT) and
 [EightB1ts/uni-sync](https://github.com/EightB1ts/uni-sync). See `louver/devices.py`.
 
-Not a Lian Li product; not affiliated with Lian Li.
+Louver is an independent implementation and contains no code from either project.
+Credits and licences are in [NOTICE](NOTICE).
+
+Not a Lian Li product; not affiliated with or endorsed by Lian Li. Lian Li, UNI HUB,
+Strimer and L-Connect are trademarks of Lian Li Industrial Co., Ltd.
+
+## Licence
+
+MIT; see [LICENSE](LICENSE).
 
 ## Development
 
 ```bash
 python3 -m pytest
 pre-commit install   # once per clone: ruff check + ruff format on every commit
+packaging/build-deb.sh   # dist/louver_<version>_all.deb
 ```
+
+To release: bump `version` in `pyproject.toml`, then push a matching tag
+(`git tag v0.2.0 && git push origin v0.2.0`). CI attaches the .deb to a GitHub Release.

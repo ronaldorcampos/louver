@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "louver"
 version = "0.1.0"
-description = "Linux control app for Lian Li UNI HUB AL V2 fans and Strimer Plus (L-Connect 3 style)"
+description = "Linux fan and RGB control for the Lian Li UNI HUB AL V2 and Strimer Plus"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = []

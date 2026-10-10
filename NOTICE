@@ -1,0 +1,19 @@
+Louver
+Copyright (c) 2026 Ronaldo Campos. Licensed under the MIT License (see LICENSE).
+
+The controller protocol (report layouts, command bytes, effect numbers) was
+learned from the community reverse-engineering in these projects. Louver is
+an independent Python implementation and contains none of their code.
+
+  lian-li-linux  https://github.com/sgtaziz/lian-li-linux
+                 Copyright (c) 2026 sgtaziz, MIT License
+  uni-sync       https://github.com/EightB1ts/uni-sync
+                 Copyright (c) 2023 Cameron Halter, MIT License
+
+Bundled fonts, under the SIL Open Font License 1.1 (louver/web/fonts/):
+  Unbounded     Copyright 2022 The Unbounded Project Authors
+  Martian Mono  Copyright 2020 The Martian Mono Project Authors
+
+Lian Li, UNI HUB, Strimer and L-Connect are trademarks of Lian Li Industrial
+Co., Ltd., named here only to say which hardware Louver works with. Louver is
+not a Lian Li product and is not affiliated with or endorsed by Lian Li.
