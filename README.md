@@ -73,8 +73,9 @@ systemctl --user enable --now louver
 The package brings the desktop app's dependencies and the udev rule. Upgrading
 restarts the service on the new version for logged-in users. `sudo apt remove louver`
 stops it for them and removes the code; your config in `~/.config/louver` stays. If
-you won't reinstall, run `systemctl --user disable louver` before removing it, which
-can't remove the start-at-login link once the package is gone.
+you won't reinstall, run `systemctl --user disable louver` before removing it: once
+the package is gone, `systemctl --user disable` can no longer remove the
+start-at-login link.
 
 ### Per-user install (any distro)
 
@@ -137,11 +138,10 @@ Restart the daemon after editing it by hand.
 
 Both controllers expose report ID `0xE0`. Commands are HID feature reports,
 colour buffers are output reports, and replies come back as input reports
-via `HIDIOCGINPUT`. The byte layouts follow the community reverse-engineering
-in [sgtaziz/lian-li-linux](https://github.com/sgtaziz/lian-li-linux) (MIT) and
-[EightB1ts/uni-sync](https://github.com/EightB1ts/uni-sync). See `louver/devices.py`.
-
-Louver is an independent implementation and contains no code from either project.
+via `HIDIOCGINPUT`. The drivers in `louver/devices.py` follow the Rust
+implementation in [sgtaziz/lian-li-linux](https://github.com/sgtaziz/lian-li-linux) (MIT),
+and its unverified effect numbers come from there; the protocol was also
+cross-checked against [EightB1ts/uni-sync](https://github.com/EightB1ts/uni-sync) (MIT).
 Credits and licences are in [NOTICE](NOTICE).
 
 Not a Lian Li product; not affiliated with or endorsed by Lian Li. Lian Li, UNI HUB,

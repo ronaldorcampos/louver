@@ -78,15 +78,24 @@ Source: https://github.com/ronaldorcampos/louver
 
 Files: *
 COPY
-  echo "Copyright: $(sed -n 's/^Copyright (c) //p' "$here/LICENSE")"
+  ours="$(sed -n 's/^Copyright (c) //p' "$here/LICENSE")"
+  echo "Copyright: $ours"
   echo "License: MIT"
-  indent <(sed '1,2d' "$here/LICENSE")
+  echo
+  # The drivers follow lian-li-linux's Rust implementation (see NOTICE).
+  echo "Files: louver/devices.py"
+  echo "Copyright: $ours"
+  echo "           $(sed -n 's/^ *Copyright (c) \(.*sgtaziz\).*/\1/p' "$here/NOTICE" | head -1)"
+  echo "License: MIT"
   echo
   echo "Files: louver/web/fonts/*"
   echo "Copyright: $(sed -n '1s/^Copyright //p' "$here/louver/web/fonts/LICENSE-unbounded.txt")"
   echo "           $(sed -n '1s/^Copyright //p' "$here/louver/web/fonts/LICENSE-martian-mono.txt")"
   echo "License: OFL-1.1"
   indent <(sed '1,2d' "$here/louver/web/fonts/LICENSE-unbounded.txt")
+  echo
+  echo "License: MIT"
+  indent <(sed '1,4d' "$here/LICENSE")  # the permission text, without our copyright line
 } > "$root/usr/share/doc/louver/copyright"
 
 find "$root" -type d -exec chmod 755 {} +

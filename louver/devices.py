@@ -1,8 +1,7 @@
 """Protocol drivers for Lian Li ENE-based wired controllers.
 
-Byte layouts follow the community reverse-engineering in
-sgtaziz/lian-li-linux (MIT) and EightB1ts/uni-sync, cross-checked against
-this hub's HID report descriptor (report 0xE0: 64-byte input, 352-byte
+These follow the Rust drivers in sgtaziz/lian-li-linux (MIT; see NOTICE),
+also cross-checked against EightB1ts/uni-sync and this hub's HID report descriptor (report 0xE0: 64-byte input, 352-byte
 output, 6-byte feature).
 """
 

@@ -64,6 +64,9 @@ def test_installed_files_point_at_the_system_copy(deb, tmp_path):
     unit = (root / "usr/lib/systemd/user/louver.service").read_text()
     assert "ExecStart=/usr/bin/louver daemon\n" in unit
     assert "PYTHONPATH" not in unit and ".local" not in unit
+    copyright = (root / "usr/share/doc/louver/copyright").read_text()
+    assert "Files: louver/devices.py" in copyright and "2026 sgtaziz" in copyright  # see NOTICE
+    assert "Permission is hereby granted" in copyright and "SIL OPEN FONT LICENSE" in copyright
     wrapper = root / "usr/bin/louver"
     assert wrapper.stat().st_mode & 0o777 == 0o755
     assert "/usr/bin/python3 -I -m louver" in wrapper.read_text()
@@ -72,7 +75,9 @@ def test_installed_files_point_at_the_system_copy(deb, tmp_path):
 STUBS = {
     # Two logged-in users, as `loginctl list-users --no-legend` prints them.
     "loginctl": 'printf "%s\\n" "1000 alice no active" "1001 bob no active"',
-    "runuser": 'echo "runuser $*" >> "$LOG"',
+    # Reads stdin like a real command may: without </dev/null in the scripts it
+    # would eat the rest of the user list.
+    "runuser": 'cat >/dev/null; echo "runuser $*" >> "$LOG"',
     "udevadm": 'echo "udevadm $*" >> "$LOG"',
     "py3compile": 'echo "py3compile $*" >> "$LOG"',
     "py3clean": 'echo "py3clean $*" >> "$LOG"',
