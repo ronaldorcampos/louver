@@ -276,7 +276,7 @@ def test_motherboard_rgb_is_off_by_default_and_validated():
     assert ok["motherboard_rgb"]["channels"] == {"argb-2": {"mode": "Static", "colors": ["#ff0000"]}}
     # A config from before motherboard RGB starts it on the theme in use; one that has the section keeps it.
     old = cfgmod.validate({"theme": "Cyberpunk"})["motherboard_rgb"]
-    assert old["lighting"] == {"mode": "Static", "colors": ["#ff00c8"]} and old["enabled"] is False
+    assert old["lighting"] == {"mode": "Chase", "colors": ["#ff00c8"]} and old["enabled"] is False
     assert (
         cfgmod.validate({"theme": "Cyberpunk", "motherboard_rgb": {}})["motherboard_rgb"]["lighting"]["mode"]
         == "Rainbow"
@@ -465,9 +465,9 @@ def test_theme_sets_every_aura_channel():
     r.aura_t.writes.clear()
     r.ctrl.update_config(lambda cfg: apply_theme(cfg, "Cyberpunk"))
     m = r.ctrl.cfg["motherboard_rgb"]
-    assert m["per_channel"] is False and m["lighting"] == {"mode": "Static", "colors": ["#ff00c8"]}
+    assert m["per_channel"] is False and m["lighting"] == {"mode": "Chase", "colors": ["#ff00c8"]}
     sent = effect_writes(r.aura_t.writes)
-    assert {ch: mode for ch, (mode, _) in sent.items()} == {0: 1, 1: 1, 2: 1, 3: 1}
+    assert {ch: mode for ch, (mode, _) in sent.items()} == {0: 9, 1: 9, 2: 9, 3: 9}
     assert sent[0][1][5:8] == bytes([0xFF, 0x00, 0xC8])  # R, G, B: no channel swap on Aura
 
 

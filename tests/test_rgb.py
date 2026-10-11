@@ -73,6 +73,8 @@ def test_every_theme_validates_and_controller_applies_it():
         # The motherboard gets the theme too, as one look on every channel.
         assert cfg["motherboard_rgb"]["lighting"]["mode"] == THEMES[name]["aura"]["mode"]
         assert cfg["motherboard_rgb"]["per_channel"] is False and cfg["motherboard_rgb"]["enabled"] is False
+        # A moving effect on the board for every theme but Stealth, which is off.
+        assert (THEMES[name]["aura"]["mode"] in ("Static", "Off")) == (name == "Stealth")
     r = Rig()
     r.ctrl.tick()
     r.hub_t.outputs.clear()

@@ -4,8 +4,9 @@ motherboard's Aura channels.
 A theme's ``hub`` is either one lighting entry (applied to all four ports)
 or a list of four. Missing fields fall back to lighting defaults. ``aura``
 is one look for every motherboard channel: the Aura controller only runs
-its own hardware effects, each with at most one colour, so it gets the
-nearest one (and Thermal's software effect can't follow the sensor there).
+its own hardware effects, each with at most one colour, so it gets a moving
+effect in the theme's main colour (and Thermal's software effect can't
+follow the sensor there). Only Stealth leaves the board still: it's off.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ THEMES: dict[str, dict] = {
             "colors": ["#001aff", "#0077ff", "#00c8ff", "#00ffd5"],
         },
         "strimer": {"mode": "Gradient", "span_all": True, "colors": ["#001aff", "#00c8ff", "#00ffd5"]},
-        "aura": {"mode": "Static", "colors": ["#0077ff"]},
+        "aura": {"mode": "Breathing", "colors": ["#0077ff"]},
     },
     "Sunset": {
         "swatch": ["#ff1e00", "#ff6a00", "#ff2d7a", "#8a00ff"],
@@ -39,14 +40,14 @@ THEMES: dict[str, dict] = {
             "colors": ["#ff1e00", "#ff6a00", "#ff2d7a", "#8a00ff"],
         },
         "strimer": {"mode": "Gradient", "span_all": True, "colors": ["#ff1e00", "#ff6a00", "#ff2d7a", "#8a00ff"]},
-        "aura": {"mode": "Static", "colors": ["#ff2d7a"]},
+        "aura": {"mode": "Chase Fade", "colors": ["#ff2d7a"]},
     },
     "Cyberpunk": {
         "swatch": ["#ff00c8", "#00f0ff"],
         # AL fans' two rings in contrasting colours.
         "hub": {"mode": "Custom", "ring": "both", "custom": {"inner": ["#ff00c8"] * 48, "outer": ["#00f0ff"] * 72}},
         "strimer": {"mode": "Mixing", "colors": ["#ff00c8", "#00f0ff"], "speed": 1},
-        "aura": {"mode": "Static", "colors": ["#ff00c8"]},
+        "aura": {"mode": "Chase", "colors": ["#ff00c8"]},
     },
     "Arctic": {
         "swatch": ["#ffffff", "#bfe9ff", "#4fb8ff"],
@@ -75,13 +76,13 @@ THEMES: dict[str, dict] = {
             "colors": ["#ff71ce", "#b967ff", "#01cdfe", "#05ffa1"],
         },
         "strimer": {"mode": "Wave", "speed": 1, "colors": ["#ff71ce", "#b967ff", "#01cdfe", "#05ffa1"]},
-        "aura": {"mode": "Static", "colors": ["#b967ff"]},
+        "aura": {"mode": "Gentle Transition"},  # a slow hue cycle, like the hub's
     },
     "Thermal": {
         "swatch": ["#005aff", "#00dc78", "#ffd200", "#ff2800"],
         "hub": {"mode": "Temperature", "ring": "both", "sensor": "cpu", "temp_range": [35, 85]},
         "strimer": {"mode": "Temperature", "sensor": "gpu", "temp_range": [35, 80]},
-        "aura": {"mode": "Static", "colors": ["#00dc78"]},
+        "aura": {"mode": "Breathing", "colors": ["#00dc78"]},
     },
     "Stealth": {
         "swatch": ["#111111", "#2a2a2a"],
