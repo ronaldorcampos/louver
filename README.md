@@ -29,8 +29,10 @@ Not supported:
 - **Other Lian Li controllers** (other UNI HUB models, other Strimers).
 - **Other boards' RGB:** MSI Mystic Light, Gigabyte RGB Fusion, ASRock
   Polychrome and the like use different controllers.
-- **RAM RGB.** Corsair DDR5 support was tried and removed: Vengeance RGB DDR5
-  sticks refuse the direct colour frames OpenRGB sends them.
+- **RAM RGB.** Memory lighting is set by writing straight to the modules over
+  the motherboard's SMBus. That needs root, and a write the modules don't
+  expect can knock them off the bus (Corsair Vengeance RGB DDR5 did, in
+  testing). Louver doesn't write to the SMBus.
 
 Ran Louver on a device or board that isn't in the table, working or not? Open a
 [hardware report](https://github.com/ronaldorcampos/louver/issues/new?template=hardware_report.yml).
