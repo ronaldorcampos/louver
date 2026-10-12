@@ -96,6 +96,7 @@ class Controller:
         self.strimer: StrimerPlus | None = None
         self.hub_firmware = ""
         self.strimer_firmware = ""
+        self.strimer_error = ""  # why a Strimer that's plugged in isn't connected
         self.error = ""
         # The motherboard's Aura controller (vendor 0x0B05, the Aura mainboard
         # PIDs only): found, watched and opened through aura_access, and only
@@ -150,9 +151,15 @@ class Controller:
             try:
                 self._init_strimer(strimer)  # type: ignore[arg-type]
                 self.strimer = strimer  # type: ignore[assignment]
+                self.strimer_error = ""
             except OSError as e:
-                log.warning("strimer init failed: %s", e)
+                msg = f"init failed: {e}"
+                if msg != self.strimer_error:  # retried every few seconds: log each new reason once
+                    log.warning("strimer %s", msg)
+                self.strimer_error = msg
                 strimer.close()  # type: ignore[attr-defined]
+        elif self.strimer is None:
+            self.strimer_error = ""  # unplugged: nothing left to explain
 
     def _tick_aura(self, now: float) -> None:
         """Every RECONNECT_EVERY: notice an unplugged or re-enumerated
@@ -640,6 +647,7 @@ class Controller:
                     "name": StrimerPlus.NAME,
                     "firmware": self.strimer_firmware,
                     "ports": self.strimer.port_count if self.strimer else 0,
+                    "error": self.strimer_error,
                 },
                 "motherboard": {
                     "present": self.mb is not None,

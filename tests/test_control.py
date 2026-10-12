@@ -107,6 +107,35 @@ def test_first_tick_initialises_hub_and_applies_modes():
     assert [g["rpm"] for g in st["hub"]["groups"]] == [1200, 800, 0, 1950]
 
 
+def test_strimer_init_failure_is_reported_once_and_clears_on_connect(caplog):
+    r = Rig()
+    r.str_t.fail = True
+    r.ctrl.tick()
+    st = r.ctrl.state()
+    assert st["hub"]["connected"] and not st["strimer"]["connected"]
+    assert st["strimer"]["error"] == "init failed: [Errno 5] EIO"
+    r.now += 5
+    r.ctrl.tick()  # retried: same reason, not logged again
+    assert r.opens == 2 and [m for m in caplog.messages if "strimer" in m] == ["strimer init failed: [Errno 5] EIO"]
+    r.str_t.fail = False
+    r.now += 5
+    r.ctrl.tick()
+    st = r.ctrl.state()
+    assert st["strimer"]["connected"] and st["strimer"]["error"] == ""
+
+
+def test_strimer_error_clears_once_it_is_unplugged():
+    r = Rig()
+    r.str_t.fail = True
+    r.ctrl.tick()
+    assert r.ctrl.state()["strimer"]["error"]
+    r.open = lambda skip=frozenset(): {}  # gone from USB
+    r.ctrl._open = r.open
+    r.now += 5
+    r.ctrl.tick()
+    assert r.ctrl.state()["strimer"]["error"] == ""
+
+
 def test_missing_temperature_triggers_failsafe_full_speed():
     r = Rig(cfg_with_modes("quiet", "quiet", "quiet", "quiet"), temps={"cpu": None})
     r.ctrl.tick()
