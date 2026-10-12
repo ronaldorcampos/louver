@@ -213,6 +213,8 @@ MIT-licensed; from this release on, Louver is GPL-2.0-or-later.
 
 ## Development
 
+How to report bugs and send changes: [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ```bash
 python3 -m pytest
 pre-commit install   # once per clone: ruff check + ruff format on every commit
