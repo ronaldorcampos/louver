@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +28,9 @@ _AMD_GPU_PREFS = [("amdgpu", "junction"), ("amdgpu", "edge")]
 
 # Values outside this range are unconnected-probe noise (e.g. nct6798 AUXTIN = 127 C).
 _PLAUSIBLE = (-20.0, 120.0)
+# A sensor that isn't there (yet), or whose hwmonN changed, triggers a fresh
+# scan at most this often.
+RESCAN_EVERY = 5.0
 
 
 @dataclass(frozen=True)
@@ -37,15 +41,20 @@ class Sensor:
 
 
 class SensorHub:
-    def __init__(self, hwmon_root: Path = HWMON, nvidia_smi: str | None = "auto"):
+    def __init__(
+        self, hwmon_root: Path = HWMON, nvidia_smi: str | None = "auto", clock: Callable[[], float] = time.monotonic
+    ):
         self.root = hwmon_root
+        self._clock = clock
+        self._scanned = -1e9
         self._nvidia = shutil.which("nvidia-smi") if nvidia_smi == "auto" else nvidia_smi
-        self._nv_cache: tuple[float, list[float]] = (0.0, [])
+        self._nv_cache: tuple[float, list[float]] = (-1e9, [])
         self._nv_lock = threading.Lock()
         self._sensors: dict[str, Sensor] = {}
         self.rescan()
 
     def rescan(self) -> None:
+        self._scanned = self._clock()
         found: dict[str, Sensor] = {}
         if self.root.exists():
             for chip in sorted(self.root.iterdir()):
@@ -66,17 +75,20 @@ class SensorHub:
                         sid = f"{base}#{n}"
                         n += 1
                     found[sid] = Sensor(sid, f"{name} {label}", str(inp))
-        for i, _ in enumerate(self._nvidia_temps(force=True)):
+        nvidia = self._nvidia_temps()
+        for i, _ in enumerate(nvidia):
             sid = f"nvidia:{i}"
             found[sid] = Sensor(sid, f"NVIDIA GPU {i}")
+        if not nvidia:  # a failing nvidia-smi isn't a GPU that's gone: keep gpu failing safe, not on the iGPU
+            found.update((k, v) for k, v in self._sensors.items() if k.startswith("nvidia:"))
         self._sensors = found
 
-    def _nvidia_temps(self, force: bool = False) -> list[float]:
+    def _nvidia_temps(self) -> list[float]:
         if not self._nvidia:
             return []
         with self._nv_lock:
             ts, vals = self._nv_cache
-            if not force and time.monotonic() - ts < 2.0:
+            if self._clock() - ts < 2.0:
                 return vals
             try:
                 out = subprocess.run(
@@ -89,7 +101,7 @@ class SensorHub:
                 vals = [float(x) for x in out.split()]
             except (OSError, subprocess.SubprocessError, ValueError):
                 vals = []
-            self._nv_cache = (time.monotonic(), vals)
+            self._nv_cache = (self._clock(), vals)
             return vals
 
     def missing(self, sid: str) -> list[str]:
@@ -101,6 +113,8 @@ class SensorHub:
         if sid == "cpu":
             for chip, label in _CPU_PREFS:
                 for s in self._sensors.values():
+                    if not s.id.startswith("hwmon:"):
+                        continue  # nvidia:N
                     _, name, lab = s.id.split(":", 2)
                     if name == chip and (label is None or lab == label):
                         return s.id
@@ -120,17 +134,35 @@ class SensorHub:
         if sid.startswith("max:"):
             vals = [v for v in (self.read(p) for p in sid[4:].split(",")) if v is not None]
             return max(vals) if vals else None
+        try:
+            return self._read(sid)
+        except LookupError:
+            if self._clock() - self._scanned < RESCAN_EVERY:
+                return None
+        self.rescan()  # a driver that loaded late, or reloaded under a new hwmonN
+        try:
+            return self._read(sid)
+        except LookupError:
+            return None
+
+    def _read(self, sid: str) -> float | None:
+        """None for a reading that's noise; LookupError when the sensor isn't
+        where the last scan found it, or wasn't found."""
         real = self.resolve(sid)
         if real is None:
-            return None
+            raise LookupError(sid)
         if real.startswith("nvidia:"):
             vals = self._nvidia_temps()
             idx = int(real.split(":")[1])
-            return vals[idx] if idx < len(vals) else None
+            if idx >= len(vals):
+                raise LookupError(sid)
+            return vals[idx]
         s = self._sensors[real]
         try:
             v = int(Path(s.path).read_text()) / 1000.0  # type: ignore[arg-type]
-        except (OSError, ValueError):
+        except OSError as e:
+            raise LookupError(sid) from e
+        except ValueError:
             return None
         return v if _PLAUSIBLE[0] <= v <= _PLAUSIBLE[1] else None
 
