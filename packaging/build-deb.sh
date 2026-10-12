@@ -82,7 +82,8 @@ Source: https://github.com/ronaldorcampos/louver
 
 Files: *
 COPY
-  ours="$(sed -n 's/^Copyright (c) //p' "$here/LICENSE")"
+  # LICENSE is the bare GPL text (so GitHub detects it); NOTICE names the holder.
+  ours="$(sed -n 's/^Copyright (c) \([^.]*\)\..*/\1/p' "$here/NOTICE" | head -1)"
   echo "Copyright: $ours"
   echo "License: GPL-2+"
   echo
