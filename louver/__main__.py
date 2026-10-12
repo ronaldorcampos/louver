@@ -148,6 +148,8 @@ def cmd_status(args, cfg: dict, path: Path) -> int:
         print(f"  {gc['name']:<12} {gc['mode']:<9} {pct}  {g['rpm']:>5} rpm  {temp}{flag}")
     s = st["strimer"]
     print(f"{s['name']}: {'connected' if s['connected'] else 'not connected'} {s['firmware']}")
+    if s.get("error"):
+        print(f"  {s['error']}")
     if st["error"]:
         print(f"error: {st['error']}")
     return 0

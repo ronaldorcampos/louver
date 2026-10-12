@@ -238,13 +238,14 @@ function renderStatus() {
   const linked = (d) => (d.connected ? ["firmware " + (d.firmware || "?"), "linked"] : ["not connected", "offline", "off"]);
   $("devices").replaceChildren(
     row("UNI HUB AL V2", ...linked(h)),
-    row("Strimer Plus", ...linked(s)),
+    row("Strimer Plus", ...(s.error ? [s.error, "error", "bad"] : linked(s))),
     ...(m?.present ? [row("Motherboard", m.chip, ...(m.error ? ["error", "bad"] : m.writable ? ["control"] : ["read-only", "off"]))] : []),
     ...(a?.enabled ? [row("Motherboard RGB", ...(a.error ? ["ASUS Aura", "error", "bad"] : linked(a)))] : []));
   renderAuraStatus();
   const b = $("banner");
   const msg = state.error || (!h.connected ? "UNI HUB not connected — check the USB cable and the udev rule (see README)." : "")
-    || (onZone() && sel.kind === "mb" ? m?.error || (m && !m.writable ? "Read-only: install the hwmon udev rule (README) to control motherboard headers." : "") : "");
+    || (onZone() && sel.kind === "mb" ? m?.error || (m && !m.writable ? "Read-only: install the hwmon udev rule (README) to control motherboard headers." : "") : "")
+    || (s.error ? "Strimer Plus: " + s.error : "");
   if (b.textContent !== msg) b.textContent = msg;  // a live region: rewrites get re-announced
   b.classList.toggle("hidden", !msg);
 }

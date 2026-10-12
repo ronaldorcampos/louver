@@ -78,6 +78,8 @@ class Controller:
         # (or hidden behind the tray) can tell its copy is out of date.
         self.cfg_rev = 0
         self.mb = mbfans if mbfans is not None and mbfans.present else None
+        self._mb_fans = mbfans  # kept while the chip is gone, to look for it again
+        self._mb_checked = -1e9  # last check that the chip is still where it was
         self._mb_governors: dict[int, Governor] = {}
         self._mb_sent: dict[int, tuple[int, float]] = {}
         self.mb_state: dict[int, dict] = {}
@@ -94,6 +96,7 @@ class Controller:
         self.strimer: StrimerPlus | None = None
         self.hub_firmware = ""
         self.strimer_firmware = ""
+        self.strimer_error = ""  # why a Strimer that's plugged in isn't connected
         self.error = ""
         # The motherboard's Aura controller (vendor 0x0B05, the Aura mainboard
         # PIDs only): found, watched and opened through aura_access, and only
@@ -148,9 +151,15 @@ class Controller:
             try:
                 self._init_strimer(strimer)  # type: ignore[arg-type]
                 self.strimer = strimer  # type: ignore[assignment]
+                self.strimer_error = ""
             except OSError as e:
-                log.warning("strimer init failed: %s", e)
+                msg = f"init failed: {e}"
+                if msg != self.strimer_error:  # retried every few seconds: log each new reason once
+                    log.warning("strimer %s", msg)
+                self.strimer_error = msg
                 strimer.close()  # type: ignore[attr-defined]
+        elif self.strimer is None:
+            self.strimer_error = ""  # unplugged: nothing left to explain
 
     def _tick_aura(self, now: float) -> None:
         """Every RECONNECT_EVERY: notice an unplugged or re-enumerated
@@ -427,7 +436,28 @@ class Controller:
             self._tick_motherboard(now, dt, floor)
             self._tick_aura(now)
 
+    def _check_motherboard(self, now: float) -> None:
+        """Every RECONNECT_EVERY: find the Super I/O chip again if it wasn't
+        there at start, went away, or its driver reloaded under a new hwmonN."""
+        fans = self._mb_fans
+        if fans is None or now - self._mb_checked < RECONNECT_EVERY:
+            return
+        self._mb_checked = now
+        if not fans.stale():
+            return
+        was = self.mb is not None
+        fans.rescan()
+        self.mb = fans if fans.present else None
+        self._mb_sent.clear()  # send every opted-in header its speed again, at the new path
+        self.mb_state.clear()
+        self.mb_error = ""
+        if self.mb is not None:
+            log.info("motherboard fans: %s at %s", fans.chip, fans.dir)
+        elif was:
+            log.warning("motherboard fans: %s went away, will look again", fans.chip)
+
     def _tick_motherboard(self, now: float, dt: float, floor: int) -> None:
+        self._check_motherboard(now)
         if self.mb is None:
             return
         configured = {h["index"]: h for h in self.cfg["motherboard"]["headers"]}
@@ -617,6 +647,7 @@ class Controller:
                     "name": StrimerPlus.NAME,
                     "firmware": self.strimer_firmware,
                     "ports": self.strimer.port_count if self.strimer else 0,
+                    "error": self.strimer_error,
                 },
                 "motherboard": {
                     "present": self.mb is not None,
@@ -651,8 +682,11 @@ class Controller:
     def shutdown(self) -> None:
         with self.lock:
             self._stopped = True
-            if self.mb is not None:
-                self.mb.release_all()  # BIOS curves take back over
+            fans = self._mb_fans
+            if fans is not None and fans.stale():  # moved since the last check: hand back at the new path
+                fans.rescan()
+            if fans is not None and fans.present:
+                fans.release_all()  # BIOS curves take back over
             if self.aura is not None:  # its lights stay as they are
                 self.aura.close()
                 self.aura = None

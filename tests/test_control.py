@@ -53,7 +53,7 @@ def test_save_load_roundtrip(tmp_path):
 
 # ---------------- controller ----------------
 class Rig:
-    def __init__(self, cfg=None, temps=None, aura_access=None):
+    def __init__(self, cfg=None, temps=None, aura_access=None, mbfans=None):
         self.hub_t = FakeTransport(HUB_RESPONSES)
         self.str_t = FakeTransport(STRIMER_RESPONSES)
         # The motherboard's Aura controller: opened only with motherboard_rgb
@@ -64,7 +64,13 @@ class Rig:
         self.opens = 0
         self.sensors = FakeSensors(temps if temps is not None else {"cpu": 50.0})
         self.ctrl = Controller(
-            cfg or {}, None, self.sensors, opener=self.open, clock=lambda: self.now, aura_access=self.aura
+            cfg or {},
+            None,
+            self.sensors,
+            opener=self.open,
+            clock=lambda: self.now,
+            aura_access=self.aura,
+            mbfans=mbfans,
         )
 
     def open(self, skip=frozenset()):
@@ -99,6 +105,35 @@ def test_first_tick_initialises_hub_and_applies_modes():
     assert Z([0xE0, 0x10, 0x62, 0x88, 0, 0]) in r.hub_t.features  # port 4 handed to MB
     assert Z([0xE0, 0x10, 0x62, 0x10, 0, 0]) in r.hub_t.features  # port 1 taken from MB
     assert [g["rpm"] for g in st["hub"]["groups"]] == [1200, 800, 0, 1950]
+
+
+def test_strimer_init_failure_is_reported_once_and_clears_on_connect(caplog):
+    r = Rig()
+    r.str_t.fail = True
+    r.ctrl.tick()
+    st = r.ctrl.state()
+    assert st["hub"]["connected"] and not st["strimer"]["connected"]
+    assert st["strimer"]["error"] == "init failed: [Errno 5] EIO"
+    r.now += 5
+    r.ctrl.tick()  # retried: same reason, not logged again
+    assert r.opens == 2 and [m for m in caplog.messages if "strimer" in m] == ["strimer init failed: [Errno 5] EIO"]
+    r.str_t.fail = False
+    r.now += 5
+    r.ctrl.tick()
+    st = r.ctrl.state()
+    assert st["strimer"]["connected"] and st["strimer"]["error"] == ""
+
+
+def test_strimer_error_clears_once_it_is_unplugged():
+    r = Rig()
+    r.str_t.fail = True
+    r.ctrl.tick()
+    assert r.ctrl.state()["strimer"]["error"]
+    r.open = lambda skip=frozenset(): {}  # gone from USB
+    r.ctrl._open = r.open
+    r.now += 5
+    r.ctrl.tick()
+    assert r.ctrl.state()["strimer"]["error"] == ""
 
 
 def test_missing_temperature_triggers_failsafe_full_speed():
