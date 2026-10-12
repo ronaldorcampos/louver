@@ -6,7 +6,9 @@ safe, with fans running faster, never slower.
 
 ## Reporting a bug
 
-Open an issue with:
+Security issues go through [SECURITY.md](SECURITY.md), not an issue.
+
+Open an issue with the bug report form. It asks for:
 
 - What you did, what you expected, and what happened.
 - The Louver version (`dpkg -s louver | grep Version`, or the git commit) and
@@ -16,15 +18,15 @@ Open an issue with:
 - `louver status`, and the log: `journalctl --user -u louver -b`.
 
 If a fan ran slower than it should, or a header wasn't handed back to the BIOS,
-say so in the title. Those come first.
+answer "Yes" to the form's first question. Those come first.
 
 ## Reporting hardware
 
 Louver has only run on the devices in the README's table. If you have a
 controller it lists but hasn't been tested on (another Aura product ID, another
-Super I/O chip), a report that it works is useful too: the board or device,
-`louver probe` or `louver aura-probe` output (with the service stopped:
-`systemctl --user stop louver`), and what you tried.
+Super I/O chip), a report that it works is useful too: use the hardware report
+form, with `louver probe` or `louver aura-probe` output (with the service
+stopped: `systemctl --user stop louver`) and what you tried.
 
 Support for a new device needs its protocol and someone who can test on it.
 Open an issue before writing a driver.

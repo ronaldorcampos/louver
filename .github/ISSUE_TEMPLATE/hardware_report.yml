@@ -1,0 +1,46 @@
+name: Hardware report
+description: Louver on a device or board it hasn't been tested on, working or not.
+labels: ["hardware"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Louver has only run on the devices in the README's table. A report that another one works helps too.
+        Run the probes with the service stopped: `systemctl --user stop louver`.
+  - type: input
+    id: device
+    attributes:
+      label: Device or board
+      placeholder: "ASUS TUF GAMING B650-PLUS"
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Does it work?
+      options:
+        - "Yes, everything I tried"
+        - "Partly"
+        - "No"
+    validations:
+      required: true
+  - type: textarea
+    id: probe
+    attributes:
+      label: Probe output
+      description: "`louver probe`, `louver aura-probe` and `louver mb-list`, whichever apply, plus `lsusb -d 0cf2:` and `lsusb -d 0b05:`"
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you tried
+      description: Modes, effects and headers you used, and what did or didn't work.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Louver version
+      description: "`dpkg -s louver | grep Version`, or the git commit"

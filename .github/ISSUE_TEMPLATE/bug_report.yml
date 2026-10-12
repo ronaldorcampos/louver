@@ -1,0 +1,54 @@
+name: Bug report
+description: Something in Louver doesn't work as it should.
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: safety
+    attributes:
+      label: Did a fan run slower than it should, or a motherboard header stay off BIOS control after Louver stopped?
+      description: These are handled first.
+      options:
+        - "No"
+        - "Yes"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Louver version
+      description: "`dpkg -s louver | grep Version`, or the git commit"
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Distro and kernel
+      placeholder: "Ubuntu 24.04, kernel 6.8.0-45-generic"
+    validations:
+      required: true
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware
+      description: "The output of `lsusb -d 0cf2:`, `lsusb -d 0b05:` and `louver mb-list`, and your motherboard model."
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: louver status
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: "`journalctl --user -u louver -b`"
+      render: text
