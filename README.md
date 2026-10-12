@@ -32,6 +32,9 @@ Not supported:
 - **RAM RGB.** Corsair DDR5 support was tried and removed: Vengeance RGB DDR5
   sticks refuse the direct colour frames OpenRGB sends them.
 
+Ran Louver on a device or board that isn't in the table, working or not? Open a
+[hardware report](https://github.com/ronaldorcampos/louver/issues/new?template=hardware_report.yml).
+
 ## Features
 
 **Fans (per port, 4 ports)**
@@ -211,9 +214,17 @@ GNU GPL, version 2 or (at your option) any later version; see [LICENSE](LICENSE)
 Louver's code before the motherboard RGB port (commit d5b59b1 and earlier) was
 MIT-licensed; from this release on, Louver is GPL-2.0-or-later.
 
+## Reporting problems
+
+- **Bugs:** open a [bug report](https://github.com/ronaldorcampos/louver/issues/new?template=bug_report.yml).
+  If a fan ran slower than it should, say so in the form's first question.
+- **Security vulnerabilities:** report them privately, as [SECURITY.md](SECURITY.md)
+  describes, never in a public issue.
+- **Ideas:** open a [feature request](https://github.com/ronaldorcampos/louver/issues/new?template=feature_request.yml).
+
 ## Development
 
-How to report bugs and send changes: [CONTRIBUTING.md](CONTRIBUTING.md).
+How to send changes: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```bash
 python3 -m pytest
