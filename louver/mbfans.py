@@ -58,21 +58,47 @@ class Header:
 
 class MotherboardFans:
     def __init__(self, root: Path = HWMON):
+        self.root = root
         self.chip = ""
         self.dir: Path | None = None
         self.headers: dict[int, Header] = {}
-        for d in sorted(root.iterdir()) if root.exists() else []:
+        self.rescan()
+
+    def rescan(self) -> None:
+        """Find the chip (again: its hwmonN changes when its driver reloads).
+        Headers Louver holds keep the BIOS mode to hand back, also through a
+        scan that finds no chip, in case the same chip comes back."""
+        held = {i: h.original_enable for i, h in self.headers.items() if h.original_enable is not None}
+        self.dir = None
+        chips = []
+        for d in sorted(self.root.iterdir()) if self.root.exists() else []:
             try:
                 name = (d / "name").read_text().strip()
             except OSError:
                 continue
             if name.startswith(SUPPORTED_CHIPS):
-                self.chip, self.dir = name, d
-                for p in sorted(d.glob("pwm[0-9]")):
-                    i = int(p.name[3:])
-                    if (d / f"fan{i}_input").exists():
-                        self.headers[i] = Header(i, d)
-                break
+                chips.append((name, d))
+        # The chip already in use first; another one (a board with two) only
+        # while no header is held, so held ones are never lost to it.
+        chips = [c for c in chips if c[0] == self.chip] or ([] if held else chips)
+        if not chips:
+            return
+        name, d = chips[0]
+        same = name == self.chip
+        self.chip, self.dir, self.headers = name, d, {}
+        for p in sorted(d.glob("pwm[0-9]")):
+            i = int(p.name[3:])
+            if (d / f"fan{i}_input").exists() or (same and i in held):
+                self.headers[i] = Header(i, d, held.get(i) if same else None)
+
+    def stale(self) -> bool:
+        """No chip, or its hwmon directory no longer names it."""
+        if self.dir is None:
+            return True
+        try:
+            return (self.dir / "name").read_text().strip() != self.chip
+        except OSError:
+            return True
 
     @property
     def present(self) -> bool:
@@ -97,6 +123,7 @@ class MotherboardFans:
             # crash left it manual, fall back to the chip's automatic mode
             # (Nuvoton SmartFan IV = 5, ITE automatic = 2).
             h.original_enable = cur if cur not in (None, MANUAL) else (2 if self.chip.startswith("it") else 5)
+        if h.enable != MANUAL:  # first time, or the chip went back to its own curve (a driver reload)
             self._write(h, f"pwm{index}_enable", MANUAL)
         self._write(h, f"pwm{index}", max(0, min(255, round(percent * 2.55))))
 

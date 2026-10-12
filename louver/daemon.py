@@ -78,6 +78,8 @@ class Controller:
         # (or hidden behind the tray) can tell its copy is out of date.
         self.cfg_rev = 0
         self.mb = mbfans if mbfans is not None and mbfans.present else None
+        self._mb_fans = mbfans  # kept while the chip is gone, to look for it again
+        self._mb_checked = -1e9  # last check that the chip is still where it was
         self._mb_governors: dict[int, Governor] = {}
         self._mb_sent: dict[int, tuple[int, float]] = {}
         self.mb_state: dict[int, dict] = {}
@@ -427,7 +429,28 @@ class Controller:
             self._tick_motherboard(now, dt, floor)
             self._tick_aura(now)
 
+    def _check_motherboard(self, now: float) -> None:
+        """Every RECONNECT_EVERY: find the Super I/O chip again if it wasn't
+        there at start, went away, or its driver reloaded under a new hwmonN."""
+        fans = self._mb_fans
+        if fans is None or now - self._mb_checked < RECONNECT_EVERY:
+            return
+        self._mb_checked = now
+        if not fans.stale():
+            return
+        was = self.mb is not None
+        fans.rescan()
+        self.mb = fans if fans.present else None
+        self._mb_sent.clear()  # send every opted-in header its speed again, at the new path
+        self.mb_state.clear()
+        self.mb_error = ""
+        if self.mb is not None:
+            log.info("motherboard fans: %s at %s", fans.chip, fans.dir)
+        elif was:
+            log.warning("motherboard fans: %s went away, will look again", fans.chip)
+
     def _tick_motherboard(self, now: float, dt: float, floor: int) -> None:
+        self._check_motherboard(now)
         if self.mb is None:
             return
         configured = {h["index"]: h for h in self.cfg["motherboard"]["headers"]}
@@ -651,8 +674,11 @@ class Controller:
     def shutdown(self) -> None:
         with self.lock:
             self._stopped = True
-            if self.mb is not None:
-                self.mb.release_all()  # BIOS curves take back over
+            fans = self._mb_fans
+            if fans is not None and fans.stale():  # moved since the last check: hand back at the new path
+                fans.rescan()
+            if fans is not None and fans.present:
+                fans.release_all()  # BIOS curves take back over
             if self.aura is not None:  # its lights stay as they are
                 self.aura.close()
                 self.aura = None

@@ -53,7 +53,7 @@ def test_save_load_roundtrip(tmp_path):
 
 # ---------------- controller ----------------
 class Rig:
-    def __init__(self, cfg=None, temps=None, aura_access=None):
+    def __init__(self, cfg=None, temps=None, aura_access=None, mbfans=None):
         self.hub_t = FakeTransport(HUB_RESPONSES)
         self.str_t = FakeTransport(STRIMER_RESPONSES)
         # The motherboard's Aura controller: opened only with motherboard_rgb
@@ -64,7 +64,13 @@ class Rig:
         self.opens = 0
         self.sensors = FakeSensors(temps if temps is not None else {"cpu": 50.0})
         self.ctrl = Controller(
-            cfg or {}, None, self.sensors, opener=self.open, clock=lambda: self.now, aura_access=self.aura
+            cfg or {},
+            None,
+            self.sensors,
+            opener=self.open,
+            clock=lambda: self.now,
+            aura_access=self.aura,
+            mbfans=mbfans,
         )
 
     def open(self, skip=frozenset()):

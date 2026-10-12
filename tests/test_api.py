@@ -300,8 +300,7 @@ def test_a_request_that_outlasts_stop_is_refused_after_shutdown(tmp_path, tmp_pa
     # rest of a PUT arrives. It must not take the header (or the hub) back.
     monkeypatch.setattr(daemon, "STOP_WAIT", 0.2)
     d = fake_chip(tmp_path)
-    r = Rig(mb_cfg({"index": 2, "mode": "manual", "manual_percent": 60}))
-    r.ctrl.mb = daemon.MotherboardFans(tmp_path)
+    r = Rig(mb_cfg({"index": 2, "mode": "manual", "manual_percent": 60}), mbfans=daemon.MotherboardFans(tmp_path))
     r.ctrl.tick()
     assert read(d, "pwm2_enable") == 1 and r.opens == 1
     sock = tmp_path_factory.mktemp("api") / "api.sock"
